@@ -362,7 +362,7 @@ def create_preview_df(df, year, month):
 with st.sidebar:
     st.title("⚙️ 排班設定面板")
     
-    # 1. 先讓使用者選擇年月 (順序對調)
+    # 1. 先讓使用者選擇年月 (才能產生正確的範本)
     c1, c2 = st.columns(2)
     with c1: 
         this_year = datetime.now().year
@@ -372,16 +372,16 @@ with st.sidebar:
 
     st.divider()
 
-    # 2. 範本下載按鈕 (現在可以讀取到 y 和 m 了)
+    # 2. 範本下載按鈕 (傳入選擇的 y, m)
     st.write("📝 **初次使用？請先下載範本**")
     
-    # 呼叫函式時傳入 y, m
     template_data = create_template_excel(y, m) 
     
+    # ✨ 這裡指定了您要求的檔名：排班範本.xlsx
     st.download_button(
         label=f"📥 下載 {y}年{m}月 專用範本",
         data=template_data,
-        file_name=f"排班範本_{y}_{m}.xlsx",
+        file_name="排班範本.xlsx", 
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
     st.divider()
