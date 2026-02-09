@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import io
 import random
+import calendar
 from datetime import datetime, timedelta
 
 # --- 1. 環境檢查 ---
@@ -241,34 +242,41 @@ def auto_calculate_last_consecutive_from_upload(uploaded_file, prev_year, prev_m
     except Exception as e:
         return {}, f"讀取上月錯誤: {e}"
 
-# ✨ 新增功能：產生標準範本檔
-def create_template_excel():
+# ✨ 修改功能：產生動態天數的範本檔
+def create_template_excel(year, month):
     output = io.BytesIO()
     wb = openpyxl.Workbook()
+    
+    # 取得該月有幾天 (例如 4月回傳 30, 2月回傳 28)
+    _, num_days = calendar.monthrange(year, month)
     
     # 1. Staff 分頁
     ws1 = wb.active
     ws1.title = "Staff"
     ws1.append(["ID", "Name", "Skills"])
-    ws1.append(["1800", "範例員工", "8-4'F,8-5"]) # 範例資料
+    ws1.append(["1800", "範例員工", "8-4'F,8-5"]) 
 
-    # 2. Roster 分頁
+    # 2. Roster 分頁 (動態生成天數)
     ws2 = wb.create_sheet("Roster")
-    # 標題: ID, Name, 1~31
-    header = ["ID", "Name"] + [str(i) for i in range(1, 32)]
+    # 標題: ID, Name, 1 ~ num_days
+    header = ["ID", "Name"] + [str(i) for i in range(1, num_days + 1)]
     ws2.append(header)
-    ws2.append(["1800", "範例員工"] + [""] * 31)
+    ws2.append(["1800", "範例員工"] + [""] * num_days)
 
-    # 3. Shifts 分頁
+    # 3. Shifts 分頁 (產生該月每一天的範例)
     ws3 = wb.create_sheet("Shifts")
     ws3.append(["Date", "Shift", "Count"])
-    ws3.append(["2026/4/1", "8-5", 1]) # 範例
+    # 自動產生該月第 1 天的範例日期
+    example_date = f"{year}/{month}/1"
+    ws3.append([example_date, "8-5", 1])
 
     # 4. ShiftTime 分頁
     ws4 = wb.create_sheet("ShiftTime")
     ws4.append(["Code", "Start", "End"])
     ws4.append(["8-5", 8, 17])
     ws4.append(["8-4'F", 8, 16.5])
+    ws4.append(["4-12", 16, 24])
+    ws4.append(["12'-9", 12.5, 21])
 
     wb.save(output)
     return output.getvalue()
@@ -354,22 +362,7 @@ def create_preview_df(df, year, month):
 with st.sidebar:
     st.title("⚙️ 排班設定面板")
     
-    # ✨ 1. 新增：範本下載按鈕 (放在最顯眼的位置)
-    st.write("📝 **初次使用？請先下載範本**")
-    template_data = create_template_excel()
-    st.download_button(
-        label="📥 下載標準 Excel 範本檔",
-        data=template_data,
-        file_name="排班範本_template.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    )
-    st.divider()
-
-    # 上傳區
-    uploaded_file = st.file_uploader("📂 請上傳 Excel 排班表 (data.xlsx)", type=['xlsx'])
-    
-    st.divider()
-    
+    # 1. 先讓使用者選擇年月 (順序對調)
     c1, c2 = st.columns(2)
     with c1: 
         this_year = datetime.now().year
@@ -377,6 +370,25 @@ with st.sidebar:
     with c2: 
         m = st.selectbox("月份", range(1,13), index=3) # 預設 4月
 
+    st.divider()
+
+    # 2. 範本下載按鈕 (現在可以讀取到 y 和 m 了)
+    st.write("📝 **初次使用？請先下載範本**")
+    
+    # 呼叫函式時傳入 y, m
+    template_data = create_template_excel(y, m) 
+    
+    st.download_button(
+        label=f"📥 下載 {y}年{m}月 專用範本",
+        data=template_data,
+        file_name=f"排班範本_{y}_{m}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+    st.divider()
+
+    # 3. 上傳區
+    uploaded_file = st.file_uploader("📂 請上傳 Excel 排班表 (data.xlsx)", type=['xlsx'])
+    
     st.info("💡 **週期上色說明**：\n- 日期列：28天大週期 (藍/橘)\n- 星期列：14天小週期 (粉/紫)")
 
 # ✨ 主畫面設計
@@ -478,6 +490,7 @@ if uploaded_file is not None:
                         if rest < 11:
                             forbidden_pairs.add((s1, s2))
                 
+                # 手動加入禁止規則
                 forbidden_pairs.add(('4-12', "12'-9"))
                 
                 if forbidden_pairs:
