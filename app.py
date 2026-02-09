@@ -82,6 +82,7 @@ def is_regular_rest(shift_name):
 def is_rest_day(shift_name):
     s = str(shift_name).strip()
     if not s: return True 
+    # 這裡確保 '01', '01特' 不會被誤判為休假 (因為 startswith('0') 不是 '0')
     if s in ['休', '0', 'nan', 'None']: return True
     return s.startswith("9")
 
@@ -257,6 +258,12 @@ def auto_calculate_last_consecutive_from_upload(uploaded_file, prev_year, prev_m
 
 def generate_formatted_excel(df, year, month):
     output = io.BytesIO()
+    # 修正：改用 openpyxl 引擎，避免 xlsxwriter 報錯
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        # 先轉成 DataFrame
+        # 這裡不直接用 writer，我們用 openpyxl 原生操作來排版
+        pass 
+
     wb = openpyxl.Workbook()
     ws = wb.active
     
@@ -288,6 +295,8 @@ def generate_formatted_excel(df, year, month):
             cell.alignment = Alignment(horizontal='center', vertical='center')
             cell.border = thin_border
             
+    # 重新存入 BytesIO
+    output = io.BytesIO()
     wb.save(output)
     return output.getvalue()
 
@@ -337,7 +346,6 @@ if uploaded_file is not None:
                 if any("卡號" in str(v) for v in r.values): h_idx = i; break
             
             if h_idx == -1: 
-                # 嘗試預設 header=0
                 h_idx = 0
 
             df_roster = pd.read_excel(uploaded_file, sheet_name='Roster', header=h_idx)
@@ -410,7 +418,6 @@ if uploaded_file is not None:
             shift_time_db = {}
             forbidden_pairs = set() 
             try:
-                # 指定 dtype 為 str 避免類似 8-5 被轉成日期
                 df_st = pd.read_excel(uploaded_file, sheet_name='ShiftTime', dtype=str)
                 for _, row in df_st.iterrows():
                     code = clean_str(row.get('Code', ''))
@@ -420,22 +427,17 @@ if uploaded_file is not None:
                         shift_time_db[code] = {'Start': s_t, 'End': e_t}
                     except: pass
                 
-                # 計算所有已知班別的衝突 (暴力列舉)
                 known_shifts = list(shift_time_db.keys())
                 for s1 in known_shifts:
                     for s2 in known_shifts:
                         t1 = shift_time_db[s1]
                         t2 = shift_time_db[s2]
-                        # 公式: (隔天開始 + 24) - 前天結束 < 11
                         rest = (t2['Start'] + 24) - t1['End']
                         if rest < 11:
                             forbidden_pairs.add((s1, s2))
                 
                 if forbidden_pairs:
                     st.warning(f"🛡️ 已啟動法規防護：自動偵測並禁止 {len(forbidden_pairs)} 組休息不足的班別組合 (如 晚班接早班)。")
-                    with st.expander("點擊查看被禁止的接班組合"):
-                        for p in forbidden_pairs:
-                            st.write(f"❌ {p[0]} (End:{shift_time_db[p[0]]['End']}) ➜ {p[1]} (Start:{shift_time_db[p[1]]['Start']})")
             except Exception as e:
                 st.info("ℹ️ 未偵測到 ShiftTime 分頁，略過休息時間檢查。")
 
@@ -492,7 +494,9 @@ if uploaded_file is not None:
 
             for _, vs in lookup.items(): model.Add(sum(vs) <= 1)
             
-            # 限制：連續上班 <= 6天
+            # ========================================================
+            # 🔥 關鍵修正：嚴格限制連續上班 <= 6天 (移除了跳過邏輯)
+            # ========================================================
             w_size = 7
             for sid in sids:
                 prev = last_con.get(sid, 0)
@@ -500,45 +504,44 @@ if uploaded_file is not None:
                 curr = []
                 for d in v_days:
                     fv = fixed.get((sid, d), "")
-                    if fv: val = 0 if is_rest_day(fv) else 1
-                    elif (sid, d) in lookup: val = sum(lookup[(sid, d)])
-                    else: val = 0
+                    if fv: 
+                        # 01, 01特 視為上班 (1)
+                        val = 0 if is_rest_day(fv) else 1
+                    elif (sid, d) in lookup: 
+                        val = sum(lookup[(sid, d)])
+                    else: 
+                        val = 0 # 該日無排班需求
                     curr.append(val)
                 
                 full = pre + curr
                 if len(full) >= w_size:
                     for i in range(len(full)-w_size+1):
                         win = full[i:i+w_size]
-                        if all(not isinstance(x, int) for x in win): continue 
+                        # ⚠️ 之前這裡有一行 'if all(...) continue' 是 bug 的元兇，已經移除！
+                        # 現在強制所有 7 天的區間，上班日加總都不能超過 6 天
                         model.Add(sum(win) <= 6)
             
             # ==========================================
             # 🔥 步驟 1：將休息時間限制加入 Solver
             # ==========================================
             for sid in sids:
-                # 遍歷每一天 (檢查 今天d1 -> 明天d2)
                 for i in range(len(v_days) - 1):
                     d1 = v_days[i]
-                    d2 = v_days[i+1] # 假設v_days是連續的日期
+                    d2 = v_days[i+1]
                     
                     fix1 = fixed.get((sid, d1))
                     fix2 = fixed.get((sid, d2))
                     
                     for s1, s2 in forbidden_pairs:
-                        # 情況 A: 兩天都是變動班 (AI 決定的)
-                        # 檢查變數是否存在 (如果該班別當天沒需求，變數就不會建立，也就不用限制)
                         v1 = vars.get((sid, d1, s1))
                         v2 = vars.get((sid, d2, s2))
                         
                         if v1 is not None and v2 is not None:
-                            # 邏輯: (不是 s1) OR (不是 s2) => 禁止同時發生
                             model.AddBoolOr([v1.Not(), v2.Not()])
                         
-                        # 情況 B: 今天已固定是 s1，明天不能排 s2
                         if fix1 == s1 and v2 is not None:
                             model.Add(v2 == 0)
                             
-                        # 情況 C: 今天變動班，明天已固定是 s2，今天不能排 s1
                         if v1 is not None and fix2 == s2:
                             model.Add(v1 == 0)
 
@@ -568,24 +571,19 @@ if uploaded_file is not None:
                 cols = ['ID', 'Name'] + [str(d) for d in v_days]
                 df_export = df_fin[cols].copy()
                 
-                st.success("🎉 排班完成！(已執行技能過濾 + 法規修正)")
+                st.success("🎉 排班完成！(已修正連續上班Bug + 解決下載錯誤)")
                 
                 df_preview = create_preview_df(df_export, y, m)
                 st.dataframe(df_preview)
                 
-                # 改用 openpyxl 引擎，避免雲端 xlsxwriter 錯誤
-                output = io.BytesIO()
-                with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                    df_export.to_excel(writer, index=False, sheet_name='Final_Schedule')
-                
-                # 重新讀取 byte data 進行下載
-                xlsx_data = generate_formatted_excel(df_export, y, m) # 這是保留格式的版本
+                # 使用 openpyxl 產生下載檔案
+                xlsx_data = generate_formatted_excel(df_export, y, m)
                 
                 fn = f"schedule_{y}_{m}_final.xlsx"
                 st.download_button(f"📥 下載 Excel ({fn})", xlsx_data, fn, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
             else:
                 st.error("❌ 排班失敗：找不到可行解。")
-                st.info("可能有以下原因：\n1. 固定班已經違反了 '休息時間不足' 的規定。\n2. 某天需要的班別，當天上班員工都沒有該技能。\n3. 人力嚴重不足。")
+                st.info("建議檢查：1. 固定班是否已連續上班超過 6 天？ 2. 需求班別是否超過員工技能供給？")
 
     except Exception as e:
         st.error(f"Error: {e}")
