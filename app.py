@@ -377,7 +377,7 @@ with st.sidebar:
     
     template_data = create_template_excel(y, m) 
     
-    # ✨ 這裡！我把 label 改成固定的 "📥 下載排班範本" 了
+    # ✨ 這裡指定了您要求的文字與檔名
     st.download_button(
         label="📥 下載排班範本",
         data=template_data,
@@ -579,7 +579,7 @@ if uploaded_file is not None:
                 status = solver.Solve(model)
 
             if status in [cp_model.OPTIMAL, cp_model.FEASIBLE]:
-                st.balloons()
+                # ✨ 這裡！特效 st.balloons() 已經被刪除了，畫面會保持冷靜。
                 
                 df_fin = df_roster.copy().set_index('ID')
                 for (sid, d, s), v in vars.items():
