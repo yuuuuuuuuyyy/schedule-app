@@ -1,10 +1,7 @@
 import streamlit as st
 import pandas as pd
-import os
-import numpy as np
-import random
-import glob
 import io
+import random
 from datetime import datetime, timedelta
 
 # --- 1. 環境檢查 ---
@@ -16,8 +13,7 @@ except ImportError:
 
 try:
     import openpyxl
-    from openpyxl.styles import Alignment, PatternFill, Font, Border, Side
-    from openpyxl.utils import get_column_letter
+    from openpyxl.styles import Alignment, Border, Side
     OPENPYXL_AVAILABLE = True
 except ImportError:
     OPENPYXL_AVAILABLE = False
@@ -51,7 +47,6 @@ def parse_skills(skill_str):
     if pd.isna(skill_str) or skill_str == "":
         return set()
     
-    # 統一處理
     s = str(skill_str).replace("，", ",").replace(" ", "").replace("　", "")
     parts = s.split(',')
     
@@ -78,10 +73,6 @@ def smart_rename(df, mapping):
 
 # --- 班別屬性判斷 ---
 
-def is_national_holiday(shift_name):
-    s = str(shift_name).strip()
-    return s.startswith("9") and len(s) > 1 and s != "9例"
-
 def is_mandatory_off(shift_name):
     return str(shift_name).strip() == "9例"
 
@@ -96,16 +87,6 @@ def is_rest_day(shift_name):
 
 def is_working_day(shift_name):
     return not is_rest_day(shift_name)
-
-def is_night_shift(shift_name):
-    s = str(shift_name)
-    return "4-12" in s or "12-8" in s
-
-def is_day_shift(shift_name):
-    s = str(shift_name)
-    if is_rest_day(s): return False
-    if is_night_shift(s): return False
-    return s.startswith("8") or s.startswith("01") or (s.startswith("12") and "9" in s)
 
 # --- 週期計算 ---
 
@@ -337,13 +318,11 @@ if uploaded_file is not None:
             staff_cols = {'ID': ['ID', '卡號'], 'Skills': ['Skills', '技能']}
             df_staff = smart_rename(df_staff, staff_cols)
             
-            # ★★★ 技能解析：建立 ID -> Set(Shifts) 的對照表 ★★★
             skills_map = {}
             for _, r in df_staff.iterrows():
                 if 'ID' in r and 'Skills' in r:
                     sid = clean_str(r['ID'])
                     skills_map[sid] = parse_skills(r['Skills'])
-                    # 如果是不排班
                     if "不排班" in str(r['Skills']):
                         skills_map[sid] = {"不排班"}
         except: 
@@ -351,45 +330,59 @@ if uploaded_file is not None:
             st.warning("⚠️ 讀取 Staff 失敗，將無法執行技能限制。")
 
         # 2. 讀取 Roster
-        df_tmp = pd.read_excel(uploaded_file, sheet_name='Roster', header=None, nrows=15)
-        h_idx = -1
-        for i, r in df_tmp.iterrows():
-            if any("卡號" in str(v) for v in r.values): h_idx = i; break
-        
-        if h_idx == -1: 
-            st.error("❌ Roster 格式錯誤")
-            st.stop()
-        
-        df_roster = pd.read_excel(uploaded_file, sheet_name='Roster', header=h_idx)
-        df_roster = smart_rename(df_roster, {'ID':['ID','卡號'], 'Name':['Name','姓名','員工']})
-        if 'Name' not in df_roster.columns: df_roster['Name'] = df_roster['ID']
-        df_roster = df_roster.loc[:, ~df_roster.columns.duplicated()]
-        df_roster['ID'] = df_roster['ID'].apply(clean_str)
+        try:
+            df_tmp = pd.read_excel(uploaded_file, sheet_name='Roster', header=None, nrows=15)
+            h_idx = -1
+            for i, r in df_tmp.iterrows():
+                if any("卡號" in str(v) for v in r.values): h_idx = i; break
+            
+            if h_idx == -1: 
+                # 嘗試預設 header=0
+                h_idx = 0
 
-        d_map = {}
-        v_days = []
-        for c in df_roster.columns:
-            try:
-                s = str(c).strip().replace(".0","")
-                d = int(s)
-                if 1<=d<=31: 
-                    d_map[c] = str(d)
-                    v_days.append(d)
-            except:
-                try: 
-                    t = pd.to_datetime(c)
-                    d_map[c] = str(t.day)
-                    v_days.append(t.day)
-                except: pass
-        
-        df_roster = df_roster.rename(columns=d_map)
-        v_days = sorted(list(set(v_days)))
-        for d in v_days: df_roster[str(d)] = df_roster[str(d)].apply(clean_str)
+            df_roster = pd.read_excel(uploaded_file, sheet_name='Roster', header=h_idx)
+            df_roster = smart_rename(df_roster, {'ID':['ID','卡號'], 'Name':['Name','姓名','員工']})
+            
+            if 'ID' not in df_roster.columns:
+                 st.error("❌ Roster 工作表找不到 'ID' 或 '卡號' 欄位，請檢查 Excel 標題。")
+                 st.stop()
+
+            if 'Name' not in df_roster.columns: df_roster['Name'] = df_roster['ID']
+            df_roster = df_roster.loc[:, ~df_roster.columns.duplicated()]
+            df_roster['ID'] = df_roster['ID'].apply(clean_str)
+
+            d_map = {}
+            v_days = []
+            for c in df_roster.columns:
+                try:
+                    s = str(c).strip().replace(".0","")
+                    d = int(s)
+                    if 1<=d<=31: 
+                        d_map[c] = str(d)
+                        v_days.append(d)
+                except:
+                    try: 
+                        t = pd.to_datetime(c)
+                        d_map[c] = str(t.day)
+                        v_days.append(t.day)
+                    except: pass
+            
+            df_roster = df_roster.rename(columns=d_map)
+            v_days = sorted(list(set(v_days)))
+            for d in v_days: df_roster[str(d)] = df_roster[str(d)].apply(clean_str)
+
+        except Exception as e:
+            st.error(f"❌ 讀取 Roster 失敗: {e}")
+            st.stop()
 
         # 3. 讀取 Shifts
-        df_shifts = pd.read_excel(uploaded_file, sheet_name='Shifts')
-        df_shifts = smart_rename(df_shifts, {'Date':['Date','日期'], 'Shift':['Shift','班別'], 'Count':['Count','人數']})
-        df_shifts['Date'] = pd.to_datetime(df_shifts['Date'])
+        try:
+            df_shifts = pd.read_excel(uploaded_file, sheet_name='Shifts')
+            df_shifts = smart_rename(df_shifts, {'Date':['Date','日期'], 'Shift':['Shift','班別'], 'Count':['Count','人數']})
+            df_shifts['Date'] = pd.to_datetime(df_shifts['Date'])
+        except Exception as e:
+            st.error(f"❌ 讀取 Shifts 失敗: {e}")
+            st.stop()
 
         # UI
         years = sorted(df_shifts['Date'].dt.year.unique())
@@ -411,70 +404,44 @@ if uploaded_file is not None:
         st.info("💡 **規則說明：** 嚴格限制班別需在員工技能清單內。9/9例/01特 依規則自動填補。")
 
         if st.button("🚀 啟動變形工時排班 (含技能限制)", type="primary"):
+            # ==========================================
+            # 🔥 步驟 0：讀取 ShiftTime 並計算禁止組合
+            # ==========================================
+            shift_time_db = {}
+            forbidden_pairs = set() 
+            try:
+                # 指定 dtype 為 str 避免類似 8-5 被轉成日期
+                df_st = pd.read_excel(uploaded_file, sheet_name='ShiftTime', dtype=str)
+                for _, row in df_st.iterrows():
+                    code = clean_str(row.get('Code', ''))
+                    try:
+                        s_t = float(row.get('Start', 0))
+                        e_t = float(row.get('End', 0))
+                        shift_time_db[code] = {'Start': s_t, 'End': e_t}
+                    except: pass
+                
+                # 計算所有已知班別的衝突 (暴力列舉)
+                known_shifts = list(shift_time_db.keys())
+                for s1 in known_shifts:
+                    for s2 in known_shifts:
+                        t1 = shift_time_db[s1]
+                        t2 = shift_time_db[s2]
+                        # 公式: (隔天開始 + 24) - 前天結束 < 11
+                        rest = (t2['Start'] + 24) - t1['End']
+                        if rest < 11:
+                            forbidden_pairs.add((s1, s2))
+                
+                if forbidden_pairs:
+                    st.warning(f"🛡️ 已啟動法規防護：自動偵測並禁止 {len(forbidden_pairs)} 組休息不足的班別組合 (如 晚班接早班)。")
+                    with st.expander("點擊查看被禁止的接班組合"):
+                        for p in forbidden_pairs:
+                            st.write(f"❌ {p[0]} (End:{shift_time_db[p[0]]['End']}) ➜ {p[1]} (Start:{shift_time_db[p[1]]['Start']})")
+            except Exception as e:
+                st.info("ℹ️ 未偵測到 ShiftTime 分頁，略過休息時間檢查。")
+
             st.write("1️⃣ AI 排班運算中...")
             
             model = cp_model.CpModel()
-            # ==========================================
-    # 自動化規則：讀取 Excel 班別時間，自動計算休息間隔
-    # ==========================================
-    
-    # 1. 嘗試讀取 ShiftTime 分頁
-    try:
-        # 讀取 Excel 中的 ShiftTime 分頁
-        df_shift_time = pd.read_excel(uploaded_file, sheet_name='ShiftTime')
-        
-        # 建立快速查詢表 (Dictionary)
-        # 格式: {'4-12': {'Start': 16, 'End': 24}, '8-5': {'Start': 8, 'End': 17}, ...}
-        shift_time_map = {}
-        for index, row in df_shift_time.iterrows():
-            s_name = str(row['Code']).strip()
-            # 確保讀進來是數字
-            try:
-                s_start = float(row['Start'])
-                s_end = float(row['End'])
-                shift_time_map[s_name] = {'Start': s_start, 'End': s_end}
-            except:
-                continue # 如果時間格式錯誤就跳過
-
-        # 2. 自動產生「禁止接續」的組合
-        # 我們檢查所有班別兩兩配對，如果 (後班開始 + 24) - 前班結束 < 11，就列入黑名單
-        forbidden_pairs = [] # 格式: [('4-12', '8-5'), ('4-12', '9')...]
-
-        all_shifts_list = list(shift_map.keys()) # 取得所有班別名稱
-
-        for s1 in all_shifts_list: # s1 是前一天的班
-            for s2 in all_shifts_list: # s2 是後一天的班
-                # 只檢查我們有設定時間的班別，沒設定的(如休假)就略過
-                if s1 in shift_time_map and s2 in shift_time_map:
-                    end_time_d1 = shift_time_map[s1]['End']
-                    start_time_d2 = shift_time_map[s2]['Start']
-                    
-                    # 計算休息時間：(隔天開始時間 + 24小時) - 前一天結束時間
-                    rest_hours = (start_time_d2 + 24) - end_time_d1
-                    
-                    # 如果休息少於 11 小時，這個組合就要禁止
-                    if rest_hours < 11:
-                        forbidden_pairs.append((s1, s2))
-        
-        st.write(f"🔍 自動偵測到 {len(forbidden_pairs)} 組休息不足的班別組合，已自動加入限制規則。")
-
-        # 3. 將這些禁止組合寫入排班邏輯
-        for e in range(num_employees):
-            for d in range(num_days - 1): # 針對每一天跟隔天
-                for s1_name, s2_name in forbidden_pairs:
-                    # 如果這兩個班別存在於目前的排班需求中
-                    if s1_name in shift_map and s2_name in shift_map:
-                        model.AddBoolOr([
-                            shifts[(e, d, shift_map[s1_name])].Not(),
-                            shifts[(e, d + 1, shift_map[s2_name])].Not()
-                        ])
-
-    except ValueError:
-        st.warning("⚠️ 找不到 'ShiftTime' 分頁，無法自動計算休息時間限制。請依照說明在 Excel 中建立。")
-    except Exception as ex:
-        st.error(f"讀取班別時間發生錯誤: {ex}")
-
-    # ==========================================
             solver = cp_model.CpSolver()
             vars = {}
             
@@ -498,7 +465,7 @@ if uploaded_file is not None:
             obj = []
             for d, s, c in needed:
                 grp = []
-                target_shift = clean_str(s) # 標準化
+                target_shift = clean_str(s)
                 
                 for sid in sids:
                     # 1. 檢查固定班
@@ -508,9 +475,7 @@ if uploaded_file is not None:
                     user_skills = skills_map.get(sid, set())
                     if "不排班" in user_skills: continue
                     
-                    # ★★★ 3. 嚴格技能檢查 ★★★
-                    # 如果是上班日，且該班別不在員工技能中，跳過
-                    # (註：9, 9例 等休息日通常不在 Shifts 需求表裡，所以這裡 s 都是上班)
+                    # 3. 嚴格技能檢查
                     if is_working_day(target_shift) and target_shift not in user_skills:
                         continue
 
@@ -527,6 +492,7 @@ if uploaded_file is not None:
 
             for _, vs in lookup.items(): model.Add(sum(vs) <= 1)
             
+            # 限制：連續上班 <= 6天
             w_size = 7
             for sid in sids:
                 prev = last_con.get(sid, 0)
@@ -544,8 +510,38 @@ if uploaded_file is not None:
                     for i in range(len(full)-w_size+1):
                         win = full[i:i+w_size]
                         if all(not isinstance(x, int) for x in win): continue 
-                        model.Add(sum(win) <= 6) 
+                        model.Add(sum(win) <= 6)
             
+            # ==========================================
+            # 🔥 步驟 1：將休息時間限制加入 Solver
+            # ==========================================
+            for sid in sids:
+                # 遍歷每一天 (檢查 今天d1 -> 明天d2)
+                for i in range(len(v_days) - 1):
+                    d1 = v_days[i]
+                    d2 = v_days[i+1] # 假設v_days是連續的日期
+                    
+                    fix1 = fixed.get((sid, d1))
+                    fix2 = fixed.get((sid, d2))
+                    
+                    for s1, s2 in forbidden_pairs:
+                        # 情況 A: 兩天都是變動班 (AI 決定的)
+                        # 檢查變數是否存在 (如果該班別當天沒需求，變數就不會建立，也就不用限制)
+                        v1 = vars.get((sid, d1, s1))
+                        v2 = vars.get((sid, d2, s2))
+                        
+                        if v1 is not None and v2 is not None:
+                            # 邏輯: (不是 s1) OR (不是 s2) => 禁止同時發生
+                            model.AddBoolOr([v1.Not(), v2.Not()])
+                        
+                        # 情況 B: 今天已固定是 s1，明天不能排 s2
+                        if fix1 == s1 and v2 is not None:
+                            model.Add(v2 == 0)
+                            
+                        # 情況 C: 今天變動班，明天已固定是 s2，今天不能排 s1
+                        if v1 is not None and fix2 == s2:
+                            model.Add(v1 == 0)
+
             status = solver.Solve(model)
 
             if status in [cp_model.OPTIMAL, cp_model.FEASIBLE]:
@@ -577,11 +573,19 @@ if uploaded_file is not None:
                 df_preview = create_preview_df(df_export, y, m)
                 st.dataframe(df_preview)
                 
-                xlsx_data = generate_formatted_excel(df_export, y, m)
+                # 改用 openpyxl 引擎，避免雲端 xlsxwriter 錯誤
+                output = io.BytesIO()
+                with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                    df_export.to_excel(writer, index=False, sheet_name='Final_Schedule')
+                
+                # 重新讀取 byte data 進行下載
+                xlsx_data = generate_formatted_excel(df_export, y, m) # 這是保留格式的版本
+                
                 fn = f"schedule_{y}_{m}_final.xlsx"
                 st.download_button(f"📥 下載 Excel ({fn})", xlsx_data, fn, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
             else:
-                st.error("排班失敗：找不到可行解。請檢查「技能清單」是否足以應付「需求班表」，或是否有太多人不能排特定班別。")
+                st.error("❌ 排班失敗：找不到可行解。")
+                st.info("可能有以下原因：\n1. 固定班已經違反了 '休息時間不足' 的規定。\n2. 某天需要的班別，當天上班員工都沒有該技能。\n3. 人力嚴重不足。")
 
     except Exception as e:
         st.error(f"Error: {e}")
