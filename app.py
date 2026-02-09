@@ -40,7 +40,7 @@ if not ORTOOLS_AVAILABLE:
 # 2. 核心邏輯定義
 # ==========================================
 
-# 基準日：2025/12/21
+# 基準日：2025/12/21 (用於週期上色)
 BASE_DATE = datetime(2025, 12, 21)
 
 def clean_str(s):
@@ -377,13 +377,58 @@ with st.sidebar:
     
     template_data = create_template_excel(y, m) 
     
-    # ✨ 這裡指定了您要求的文字與檔名
     st.download_button(
         label="📥 下載排班範本",
         data=template_data,
         file_name="排班範本.xlsx", 
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
+    
+    # 🌟 新功能：快速生成需求表
+    with st.expander("🛠️ 快速生成每月需求表 (Shifts)"):
+        st.caption("勾選平日/假日需要的班別，自動產生整個月的 Excel！")
+        
+        # 班別清單 (你可以自己加)
+        all_shifts = ["8-4' F", "8-5", "12' -9", "4-12", "8-5掃", "01", "01特", "9", "9例"]
+        
+        st.write("🗓️ **平日 (週一~週五)**:")
+        wd_shifts = st.multiselect("平日班別", all_shifts, default=["8-4' F", "8-5", "12' -9", "4-12", "8-5掃", "01"])
+        
+        st.write("🎉 **假日 (週六、週日)**:")
+        we_shifts = st.multiselect("假日班別", all_shifts, default=["8-4' F", "4-12", "8-4' F"]) # 預設值可改
+
+        if st.button("⚡ 生成並準備下載"):
+            try:
+                _, num_days = calendar.monthrange(y, m)
+                data_gen = []
+                for day_gen in range(1, num_days + 1):
+                    dt_gen = datetime(y, m, day_gen)
+                    date_str = dt_gen.strftime("%Y/%-m/%-d")
+                    
+                    # 判斷平假日 (5=週六, 6=週日)
+                    if dt_gen.weekday() >= 5:
+                        target_shifts = we_shifts
+                    else:
+                        target_shifts = wd_shifts
+                    
+                    for s_name in target_shifts:
+                        data_gen.append([date_str, s_name, 1])
+                
+                df_gen = pd.DataFrame(data_gen, columns=["Date", "Shift", "Count"])
+                output_gen = io.BytesIO()
+                # 使用 xlsxwriter 引擎寫入 (Streamlit 支援度好)
+                with pd.ExcelWriter(output_gen, engine='xlsxwriter') as writer:
+                    df_gen.to_excel(writer, sheet_name='Shifts', index=False)
+                
+                st.download_button(
+                    label=f"📥 下載 {m}月需求表",
+                    data=output_gen.getvalue(),
+                    file_name=f"shifts_{y}_{m}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
+            except Exception as e:
+                st.error(f"生成失敗: {e}")
+
     st.divider()
 
     # 3. 上傳區
@@ -579,7 +624,7 @@ if uploaded_file is not None:
                 status = solver.Solve(model)
 
             if status in [cp_model.OPTIMAL, cp_model.FEASIBLE]:
-                # ✨ 這裡！特效 st.balloons() 已經被刪除了，畫面會保持冷靜。
+                # 特效已移除，保持畫面專業
                 
                 df_fin = df_roster.copy().set_index('ID')
                 for (sid, d, s), v in vars.items():
