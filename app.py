@@ -3,7 +3,7 @@ import pandas as pd
 import io
 import random
 import calendar
-import re
+import re  # 匯入正則表達式，用來抓取 "2例" 裡的數字
 from datetime import datetime, timedelta
 
 # --- 1. 環境檢查 ---
@@ -54,13 +54,14 @@ def clean_str(s):
     if s in ["0", "nan", "None", ""]: return ""
     return s.replace(" ", "").replace("　", "").replace("’", "'").replace("‘", "'").replace("，", ",")
 
-# 小工具：從 "2例" 或 "3休" 中提取數字
+# ✨ 關鍵新功能：從 "2例" 或 "3休" 中提取數字
 def extract_number(s):
     if pd.isna(s): return 0
     s_str = str(s)
+    # 使用正則表達式尋找字串中的所有數字
     numbers = re.findall(r'\d+', s_str)
     if numbers:
-        return int(numbers[0])
+        return int(numbers[0]) # 回傳找到的第一個數字
     return 0
 
 def parse_skills(skill_str):
@@ -377,9 +378,9 @@ with st.sidebar:
     c1, c2 = st.columns(2)
     with c1: 
         this_year = datetime.now().year
-        # ✨ 修改這裡：產生更多年份，例如從去年開始往後算 10 年 (2025 ~ 2035)
+        # 產生年份範圍 (去年 ~ 往後 10 年)
         year_range = range(this_year - 1, this_year + 10)
-        y = st.selectbox("年份", year_range, index=1) # 預設選中今年
+        y = st.selectbox("年份", year_range, index=1) 
     with c2: 
         m = st.selectbox("月份", range(1,13), index=3) # 預設 4月
 
@@ -510,7 +511,7 @@ if uploaded_file is not None:
         # ✨ 讀取休假限制 (支援文字格式 & 姓名對照)
         leave_constraints = []
         try:
-            # 建立 ID 與 Name 的對照表
+            # 建立 姓名 -> ID 的對照表
             name_to_id = {}
             if 'Name' in df_roster.columns and 'ID' in df_roster.columns:
                 for _, r in df_roster.iterrows():
@@ -537,9 +538,12 @@ if uploaded_file is not None:
                 for _, r in df_leave.iterrows():
                     try:
                         raw_id = clean_str(r['ID'])
+                        # 如果 ID 欄位填的是姓名，嘗試轉為 ID
                         l_sid = name_to_id.get(raw_id, raw_id)
 
                         l_date = pd.to_datetime(r['LimitDate'])
+                        
+                        # ✨ 使用 extract_number 解析 "2例" -> 2
                         l_min_ex = extract_number(r.get('MinExample', 0))
                         l_min_re = extract_number(r.get('MinRest', 0))
 
