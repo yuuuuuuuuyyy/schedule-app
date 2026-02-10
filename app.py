@@ -87,7 +87,7 @@ def smart_rename(df, mapping):
                     break
     if new_columns:
         df = df.rename(columns=new_columns)
-    # ✨ 防護機制：移除重複欄位
+    # 防護機制：移除重複欄位
     df = df.loc[:, ~df.columns.duplicated()]
     return df
 
@@ -101,7 +101,7 @@ def is_regular_rest(shift_name):
 def is_rest_day(shift_name):
     """
     判斷是否為休息日。
-    依據用戶規則：只有 '9' 開頭的才是休息日。
+    只有 '9' 開頭的才是休息日。
     '01', '01特', '特' 等皆視為上班日。
     """
     s = str(shift_name).strip()
@@ -213,9 +213,8 @@ def get_prev_month(year, month):
     if month == 1: return year - 1, 12
     return year, month - 1
 
-# ✨ 修改功能：同時回傳「連續上班天數」與「上個月最後一天的班別」
 def auto_calculate_last_consecutive_from_upload(uploaded_file, prev_year, prev_month, current_staff_ids):
-    if uploaded_file is None: return {}, {}, "無上傳檔案" # 多回傳一個 dict
+    if uploaded_file is None: return {}, {}, "無上傳檔案"
     try:
         xls = pd.ExcelFile(uploaded_file)
         sheets = xls.sheet_names
@@ -249,7 +248,7 @@ def auto_calculate_last_consecutive_from_upload(uploaded_file, prev_year, prev_m
         day_cols.sort(key=lambda x: int(float(str(x))))
         
         last_consecutive = {}
-        last_shift_map = {} # 記錄每個人上個月最後一天的班別
+        last_shift_map = {} 
         
         for sid in current_staff_ids:
             row = df_prev[df_prev[id_col] == sid]
@@ -262,7 +261,6 @@ def auto_calculate_last_consecutive_from_upload(uploaded_file, prev_year, prev_m
             con = 0
             for c in reversed(day_cols):
                 val = row.iloc[0][c]
-                # Series 防護
                 if isinstance(val, pd.Series): val = val.iloc[0]
                 if is_working_day(str(val)): con += 1
                 else: break
@@ -270,7 +268,7 @@ def auto_calculate_last_consecutive_from_upload(uploaded_file, prev_year, prev_m
 
             # 2. 抓取最後一天的班別
             if day_cols:
-                last_val = row.iloc[0][day_cols[-1]] # 最後一欄
+                last_val = row.iloc[0][day_cols[-1]]
                 if isinstance(last_val, pd.Series): last_val = last_val.iloc[0]
                 last_shift_map[sid] = clean_str(last_val)
             else:
@@ -439,13 +437,14 @@ with st.sidebar:
     with st.expander("🛠️ 快速生成每月需求表 (Shifts)"):
         st.caption("勾選平日/假日需要的班別，自動產生整個月的 Excel！")
         
-        all_shifts = ["8-4' F", "8-5", "12' -9", "8-4'掃", "8-4'銷", "4-12", "8-5銷", "8-4'", "8-5掃", "01", "01特", "9", "9例"]
+        # ✨ 關鍵修正：將 "8-4'" 和 "8-4'掃" 加入 all_shifts，避免 multiselect 報錯
+        all_shifts = ["8-4' F", "8-5", "12' -9", "4-12", "8-5掃", "01", "01特", "9", "9例", "8-4'", "8-4'掃"]
         
         st.write("🗓️ **平日 (週一~週五)**:")
         wd_shifts = st.multiselect("平日班別", all_shifts, default=["8-4' F", "8-5", "12' -9", "4-12", "8-5掃", "01"])
         
         st.write("🎉 **假日 (週六、週日)**:")
-        we_shifts = st.multiselect("假日班別", all_shifts, default=["8-4' F", "8-4'掃", "4-12", "8-4'"]) 
+        we_shifts = st.multiselect("假日班別", all_shifts, default=["8-4' F", "4-12", "8-4'", "8-4'掃"]) 
 
         if st.button("⚡ 生成並準備下載"):
             try:
@@ -596,7 +595,6 @@ if uploaded_file is not None:
 
         py, pm = get_prev_month(y, m)
         sids = df_roster['ID'].tolist()
-        # ✨ 更新：同時取得連續天數與最後一天的班別
         last_con, last_shift_map, msg = auto_calculate_last_consecutive_from_upload(uploaded_file, py, pm, sids)
         
         if "找不到" in msg: 
@@ -711,17 +709,16 @@ if uploaded_file is not None:
                             model.Add(sum(win) <= 6)
                 
                 for sid in sids:
-                    # ✨ 檢查跨月班別銜接 (上個月底 -> 這個月1號)
+                    # 跨月銜接檢查 (上個月底 -> 本月1號)
                     last_shift = last_shift_map.get(sid)
-                    if last_shift: # 如果上個月有班
+                    if last_shift:
                         for s1, s2 in forbidden_pairs:
-                            if clean_str(last_shift) == s1: # 如果上個月最後一天是 s1 (例如 4-12)
-                                # 那這個月 1 號就不能排 s2 (例如 8-4)
+                            if clean_str(last_shift) == s1: 
                                 v2 = vars.get((sid, 1, s2))
                                 if v2 is not None:
                                     model.Add(v2 == 0)
 
-                    # 檢查本月內的班別銜接
+                    # 本月內銜接檢查
                     for i in range(len(v_days) - 1):
                         d1 = v_days[i]
                         d2 = v_days[i+1]
@@ -741,8 +738,8 @@ if uploaded_file is not None:
                 for lc in leave_constraints:
                     sid = lc['sid']
                     limit_d = lc['date'].day
-                    target_9li = lc['min_ex'] # 目標 9例 數量
-                    target_9 = lc['min_re']   # 目標 9 數量
+                    target_9li = lc['min_ex'] 
+                    target_9 = lc['min_re']   
                     
                     vars_9li = []
                     vars_9 = []
