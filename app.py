@@ -89,7 +89,7 @@ def smart_rename(df, mapping):
         df = df.rename(columns=new_columns)
     return df
 
-# --- 班別屬性判斷 ---
+# --- 班別屬性判斷 (關鍵修正區) ---
 def is_mandatory_off(shift_name):
     return str(shift_name).strip() == "9例"
 
@@ -97,10 +97,20 @@ def is_regular_rest(shift_name):
     return str(shift_name).strip() == "9"
 
 def is_rest_day(shift_name):
+    """
+    判斷是否為休息日。
+    規則：只有以 '9' 開頭的才是休息日。
+    '01', '特' 等皆視為上班日。
+    """
     s = str(shift_name).strip()
     if not s: return True 
     if s in ['休', '0', 'nan', 'None']: return True
-    return s.startswith("9")
+    
+    # 只有 9 開頭算休息
+    if s.startswith("9"): return True
+    
+    # 其他 (包含 01, 特, 8-5) 都是上班
+    return False
 
 def is_working_day(shift_name):
     return not is_rest_day(shift_name)
@@ -288,7 +298,7 @@ def create_template_excel(year, month):
     # 5. 例休
     ws5 = wb.create_sheet("例休")
     ws5.append(["ID", "日期", "至少9例", "至少9"]) 
-    ws5.append(["1800", f"{year}/{month}/15", "2例", "2休"])
+    ws5.append(["1800", f"{year}/{month}/15", 2, 2])
     
     ws5.column_dimensions['B'].width = 15
 
@@ -424,7 +434,8 @@ with st.sidebar:
                 
                 df_gen = pd.DataFrame(data_gen, columns=["Date", "Shift", "Count"])
                 output_gen = io.BytesIO()
-                with pd.ExcelWriter(output_gen, engine='xlsxwriter') as writer:
+                # 修正: 改用 openpyxl 引擎，避免 xlsxwriter 缺失問題
+                with pd.ExcelWriter(output_gen, engine='openpyxl') as writer:
                     df_gen.to_excel(writer, sheet_name='Shifts', index=False)
                 
                 st.download_button(
@@ -541,7 +552,7 @@ if uploaded_file is not None:
                         l_min_ex = extract_number(r.get('MinExample', 0))
                         l_min_re = extract_number(r.get('MinRest', 0))
 
-                        # ✨ 只檢查月份 (忽略年份)
+                        # 只檢查月份，忽略年份 (相容不同年份格式)
                         if l_date.month == m:
                             leave_constraints.append({
                                 'sid': l_sid,
@@ -565,7 +576,7 @@ if uploaded_file is not None:
             st.success(f"🛡️ 已讀取 {len(leave_constraints)} 條指定日期【例休】限制")
             with st.expander("🔍 查看已讀取的例休限制 (前 5 筆)"):
                 for i, lc in enumerate(leave_constraints[:5]):
-                    st.write(f"#{i+1}: 員工 {lc['sid']} 在 {lc['date'].month}/{lc['date'].day} 前，至少休 {lc['min_ex']}例 + {lc['min_re']}休")
+                    st.write(f"#{i+1}: 員工 {lc['sid']} 在 {lc['date'].month}/{lc['date'].day} 前，必須剛好排 {lc['min_ex']}例 + {lc['min_re']}休")
 
         mask = (df_shifts['Date'].dt.year == y) & (df_shifts['Date'].dt.month == m)
         m_shifts = df_shifts[mask].copy()
@@ -702,8 +713,8 @@ if uploaded_file is not None:
                     if target_work_days < 0:
                         st.warning(f"⚠️ 警告：員工 {sid} 在 {limit_d} 號前已被固定班表塞滿，無法滿足【例休】要求！")
                     elif work_days_vars:
-                        # ✨ 關鍵修改：使用 == (等於) 而不是 <=
-                        # 這樣才能確保休假天數「不能多也不能少」
+                        # ✨ 關鍵修改：使用 == (等於) 嚴格鎖定工作天數
+                        # 這樣就代表：休假天數「不能多也不能少」
                         model.Add(sum(work_days_vars) == target_work_days)
 
                 status = solver.Solve(model)
