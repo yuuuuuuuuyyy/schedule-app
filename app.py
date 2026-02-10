@@ -46,7 +46,6 @@ BASE_DATE = datetime(2025, 12, 21)
 
 def clean_str(s):
     if isinstance(s, pd.Series): 
-        # ✨ 防護機制：如果是 Series，只取第一個值
         if s.empty: return ""
         s = s.iloc[0]
     if pd.isna(s): return ""
@@ -88,8 +87,6 @@ def smart_rename(df, mapping):
                     break
     if new_columns:
         df = df.rename(columns=new_columns)
-    # ✨ 這裡也要防護：重新命名後移除重複欄位
-    df = df.loc[:, ~df.columns.duplicated()]
     return df
 
 # --- 班別屬性判斷 ---
@@ -304,6 +301,7 @@ def create_template_excel(year, month):
     wb.save(output)
     return output.getvalue()
 
+# ✨ 關鍵修改：在結果 Excel 後面加入統計欄位
 def generate_formatted_excel(df, year, month):
     wb = openpyxl.Workbook()
     ws = wb.active
@@ -314,20 +312,23 @@ def generate_formatted_excel(df, year, month):
     fill_small_pink = PatternFill(start_color="F2DCDB", end_color="F2DCDB", fill_type="solid") 
     fill_small_purple = PatternFill(start_color="E4DFEC", end_color="E4DFEC", fill_type="solid") 
     
-    target_stats = ["9例", "9", "4-12", "12'-9"] 
+    # 1. 準備表頭，並加入統計欄位
+    target_stats = ["9例", "9", "4-12", "12'-9"] # 要統計的班別
     
     headers = list(df.columns)
     if 'Name' in headers: headers[headers.index('Name')] = '員工'
     
+    # 增加空白欄與統計欄位
     headers.extend([""] + target_stats)
     
     ws.append(headers)
     
+    # 2. 準備星期列
     weekday_map = {0: '一', 1: '二', 2: '三', 3: '四', 4: '五', 5: '六', 6: '日'}
     weekdays = []
     for col in headers:
         if col in target_stats or col == "":
-            weekdays.append('') 
+            weekdays.append('') # 統計欄無星期
         elif col == 'ID': weekdays.append('')
         elif col == '員工': weekdays.append('星期')
         else:
@@ -338,16 +339,21 @@ def generate_formatted_excel(df, year, month):
             except: weekdays.append('')
     ws.append(weekdays)
     
+    # 3. 填入數據並計算統計
     for row_data in df.values.tolist():
+        # row_data[2:] 是每日排班內容 (排除 ID, Name)
         shifts = [str(x).strip() for x in row_data[2:]]
         
+        # 計算次數
         counts = []
         for t in target_stats:
             counts.append(shifts.count(t))
             
+        # 組合最終列：原始數據 + 空白 + 統計數據
         final_row = row_data + [""] + counts
         ws.append(final_row)
         
+    # 4. 格式化 (邊框與顏色)
     thin_border = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
     
     for row in ws.iter_rows():
@@ -355,6 +361,7 @@ def generate_formatted_excel(df, year, month):
             cell.alignment = Alignment(horizontal='center', vertical='center')
             cell.border = thin_border
             
+            # 處理週期上色 (只對日期欄位)
             if cell.row <= 2:
                 header_val = headers[cell.column - 1]
                 try:
@@ -446,6 +453,7 @@ with st.sidebar:
                 
                 df_gen = pd.DataFrame(data_gen, columns=["Date", "Shift", "Count"])
                 output_gen = io.BytesIO()
+                # 修正: 改用 openpyxl 引擎，避免 xlsxwriter 缺失問題
                 with pd.ExcelWriter(output_gen, engine='openpyxl') as writer:
                     df_gen.to_excel(writer, sheet_name='Shifts', index=False)
                 
@@ -514,9 +522,6 @@ if uploaded_file is not None:
                         v_days.append(t.day)
                     except: pass
             df_roster = df_roster.rename(columns=d_map)
-            # ✨ 關鍵修復：重新命名後移除重複欄位
-            df_roster = df_roster.loc[:, ~df_roster.columns.duplicated()]
-            
             v_days = sorted(list(set(v_days)))
             for d in v_days: df_roster[str(d)] = df_roster[str(d)].apply(clean_str)
         except Exception as e:
@@ -632,13 +637,8 @@ if uploaded_file is not None:
                 for _, r in df_roster.iterrows():
                     sid = r['ID']
                     for d in v_days:
-                        # ✨ 關鍵修復：從 Series 中只取第一個值 (避免 ambiguous truth value 錯誤)
-                        v_obj = r[str(d)]
-                        if isinstance(v_obj, pd.Series): v_obj = v_obj.iloc[0]
-                        v = str(v_obj).strip()
-                        
-                        if v not in ["", "nan", "None"]:
-                            fixed[(sid, d)] = v
+                        v = r[str(d)]
+                        if v != "": fixed[(sid, d)] = v
 
                 needed = []
                 for _, r in m_shifts.iterrows():
@@ -686,6 +686,7 @@ if uploaded_file is not None:
                             val = 0 if is_rest_day(fv) else 1
                         elif (sid, d) in lookup: 
                             # 找出當天所有 "工作班" 的變數並加總
+                            # lookup[(sid, d)] = [(s1, v1), (s2, v2)...]
                             working_vars = [v for (s, v) in lookup[(sid, d)] if is_working_day(s)]
                             val = sum(working_vars)
                         else: 
