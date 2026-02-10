@@ -91,11 +91,9 @@ def smart_rename(df, mapping):
 
 # --- 班別屬性判斷 ---
 def is_mandatory_off(shift_name):
-    # 嚴格判斷 9例
     return str(shift_name).strip() == "9例"
 
 def is_regular_rest(shift_name):
-    # 嚴格判斷 9
     return str(shift_name).strip() == "9"
 
 def is_rest_day(shift_name):
@@ -107,11 +105,7 @@ def is_rest_day(shift_name):
     s = str(shift_name).strip()
     if not s: return True 
     if s in ['休', '0', 'nan', 'None']: return True
-    
-    # 只有 9 開頭算休息 (例如 9, 9例)
     if s.startswith("9"): return True
-    
-    # 其他全部算上班
     return False
 
 def is_working_day(shift_name):
@@ -307,6 +301,7 @@ def create_template_excel(year, month):
     wb.save(output)
     return output.getvalue()
 
+# ✨ 關鍵修改：在結果 Excel 後面加入統計欄位
 def generate_formatted_excel(df, year, month):
     wb = openpyxl.Workbook()
     ws = wb.active
@@ -317,13 +312,24 @@ def generate_formatted_excel(df, year, month):
     fill_small_pink = PatternFill(start_color="F2DCDB", end_color="F2DCDB", fill_type="solid") 
     fill_small_purple = PatternFill(start_color="E4DFEC", end_color="E4DFEC", fill_type="solid") 
     
-    weekday_map = {0: '一', 1: '二', 2: '三', 3: '四', 4: '五', 5: '六', 6: '日'}
+    # 1. 準備表頭，並加入統計欄位
+    target_stats = ["9例", "9", "4-12", "12'-9"] # 要統計的班別
+    
     headers = list(df.columns)
     if 'Name' in headers: headers[headers.index('Name')] = '員工'
     
+    # 增加空白欄與統計欄位
+    headers.extend([""] + target_stats)
+    
+    ws.append(headers)
+    
+    # 2. 準備星期列
+    weekday_map = {0: '一', 1: '二', 2: '三', 3: '四', 4: '五', 5: '六', 6: '日'}
     weekdays = []
     for col in headers:
-        if col == 'ID': weekdays.append('')
+        if col in target_stats or col == "":
+            weekdays.append('') # 統計欄無星期
+        elif col == 'ID': weekdays.append('')
         elif col == '員工': weekdays.append('星期')
         else:
             try:
@@ -331,13 +337,23 @@ def generate_formatted_excel(df, year, month):
                 dt = datetime(year, month, d)
                 weekdays.append(weekday_map[dt.weekday()])
             except: weekdays.append('')
-    
-    ws.append(headers)
     ws.append(weekdays)
     
-    for r in df.values.tolist():
-        ws.append(r)
+    # 3. 填入數據並計算統計
+    for row_data in df.values.tolist():
+        # row_data[2:] 是每日排班內容 (排除 ID, Name)
+        shifts = [str(x).strip() for x in row_data[2:]]
         
+        # 計算次數
+        counts = []
+        for t in target_stats:
+            counts.append(shifts.count(t))
+            
+        # 組合最終列：原始數據 + 空白 + 統計數據
+        final_row = row_data + [""] + counts
+        ws.append(final_row)
+        
+    # 4. 格式化 (邊框與顏色)
     thin_border = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
     
     for row in ws.iter_rows():
@@ -345,6 +361,7 @@ def generate_formatted_excel(df, year, month):
             cell.alignment = Alignment(horizontal='center', vertical='center')
             cell.border = thin_border
             
+            # 處理週期上色 (只對日期欄位)
             if cell.row <= 2:
                 header_val = headers[cell.column - 1]
                 try:
@@ -646,7 +663,7 @@ if uploaded_file is not None:
                         v = model.NewBoolVar(f"{sid}_{d}_{s}")
                         vars[(sid, d, s)] = v
                         grp.append(v)
-                        # ✨ 修改：lookup 改存 (shift_name, var) tuple，方便後續篩選
+                        # ✨ 修改：lookup 改存 (shift_name, var) tuple
                         if (sid, d) not in lookup: lookup[(sid, d)] = []
                         lookup[(sid, d)].append((target_shift, v)) 
                         obj.append(v * random.randint(100, 200)) 
@@ -669,6 +686,7 @@ if uploaded_file is not None:
                             val = 0 if is_rest_day(fv) else 1
                         elif (sid, d) in lookup: 
                             # 找出當天所有 "工作班" 的變數並加總
+                            # lookup[(sid, d)] = [(s1, v1), (s2, v2)...]
                             working_vars = [v for (s, v) in lookup[(sid, d)] if is_working_day(s)]
                             val = sum(working_vars)
                         else: 
