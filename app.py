@@ -89,7 +89,7 @@ def smart_rename(df, mapping):
         df = df.rename(columns=new_columns)
     return df
 
-# --- 班別屬性判斷 (關鍵修正區) ---
+# --- 班別屬性判斷 (嚴格定義修正) ---
 def is_mandatory_off(shift_name):
     return str(shift_name).strip() == "9例"
 
@@ -99,17 +99,17 @@ def is_regular_rest(shift_name):
 def is_rest_day(shift_name):
     """
     判斷是否為休息日。
-    規則：只有以 '9' 開頭的才是休息日。
-    '01', '特' 等皆視為上班日。
+    嚴格規則：只有以 '9' 開頭的班別才是休息日。
+    '01', '01特', '特' 等皆視為上班日。
     """
     s = str(shift_name).strip()
     if not s: return True 
     if s in ['休', '0', 'nan', 'None']: return True
     
-    # 只有 9 開頭算休息
+    # 只有 9 開頭算休息 (例如 9, 9例)
     if s.startswith("9"): return True
     
-    # 其他 (包含 01, 特, 8-5) 都是上班
+    # 其他全部算上班 (包含 01, 01特, 8-5)
     return False
 
 def is_working_day(shift_name):
@@ -644,13 +644,17 @@ if uploaded_file is not None:
                         v = model.NewBoolVar(f"{sid}_{d}_{s}")
                         vars[(sid, d, s)] = v
                         grp.append(v)
+                        # ✨ 修改：lookup 改存 (shift_name, var) tuple
                         if (sid, d) not in lookup: lookup[(sid, d)] = []
-                        lookup[(sid, d)].append(v)
+                        lookup[(sid, d)].append((target_shift, v)) 
                         obj.append(v * random.randint(100, 200)) 
                     if grp: model.Add(sum(grp) <= c)
 
                 model.Maximize(sum(obj))
-                for _, vs in lookup.items(): model.Add(sum(vs) <= 1)
+                # 每個員工每天只能排一個班
+                for _, vs in lookup.items(): 
+                    # vs 是 list of (shift_name, var)
+                    model.Add(sum([x[1] for x in vs]) <= 1)
                 
                 w_size = 7
                 for sid in sids:
@@ -662,7 +666,10 @@ if uploaded_file is not None:
                         if fv: 
                             val = 0 if is_rest_day(fv) else 1
                         elif (sid, d) in lookup: 
-                            val = sum(lookup[(sid, d)])
+                            # 找出當天所有 "工作班" 的變數並加總
+                            # lookup[(sid, d)] = [(s1, v1), (s2, v2)...]
+                            working_vars = [v for (s, v) in lookup[(sid, d)] if is_working_day(s)]
+                            val = sum(working_vars)
                         else: 
                             val = 0 
                         curr.append(val)
@@ -708,13 +715,16 @@ if uploaded_file is not None:
                             if is_working_day(fv): 
                                 target_work_days -= 1 
                         elif (sid, d) in lookup:
-                             work_days_vars.extend(lookup[(sid, d)])
+                             # lookup 結構現在是 [(shift_name, var), ...]
+                             # 只把 "工作班" 的變數拿出來加
+                             for s_name, var in lookup[(sid, d)]:
+                                 if is_working_day(s_name):
+                                     work_days_vars.append(var)
                     
                     if target_work_days < 0:
                         st.warning(f"⚠️ 警告：員工 {sid} 在 {limit_d} 號前已被固定班表塞滿，無法滿足【例休】要求！")
                     elif work_days_vars:
-                        # ✨ 關鍵修改：使用 == (等於) 嚴格鎖定工作天數
-                        # 這樣就代表：休假天數「不能多也不能少」
+                        # ✨ 關鍵：嚴格等於 (強迫 AI 排滿工作日，不能偷懶多休)
                         model.Add(sum(work_days_vars) == target_work_days)
 
                 status = solver.Solve(model)
