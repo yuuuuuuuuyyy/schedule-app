@@ -3,7 +3,7 @@ import pandas as pd
 import io
 import random
 import calendar
-import re  # 匯入正則表達式，用來抓取 "2例" 裡的數字
+import re
 from datetime import datetime, timedelta
 
 # --- 1. 環境檢查 ---
@@ -54,14 +54,13 @@ def clean_str(s):
     if s in ["0", "nan", "None", ""]: return ""
     return s.replace(" ", "").replace("　", "").replace("’", "'").replace("‘", "'").replace("，", ",")
 
-# ✨ 關鍵新功能：從 "2例" 或 "3休" 中提取數字
+# 小工具：從 "2例" 或 "3休" 中提取數字
 def extract_number(s):
     if pd.isna(s): return 0
     s_str = str(s)
-    # 使用正則表達式尋找字串中的所有數字
     numbers = re.findall(r'\d+', s_str)
     if numbers:
-        return int(numbers[0]) # 回傳找到的第一個數字
+        return int(numbers[0])
     return 0
 
 def parse_skills(skill_str):
@@ -378,7 +377,6 @@ with st.sidebar:
     c1, c2 = st.columns(2)
     with c1: 
         this_year = datetime.now().year
-        # 產生年份範圍 (去年 ~ 往後 10 年)
         year_range = range(this_year - 1, this_year + 10)
         y = st.selectbox("年份", year_range, index=1) 
     with c2: 
@@ -508,10 +506,9 @@ if uploaded_file is not None:
             st.error(f"❌ 讀取 Shifts 失敗: {e}")
             st.stop()
 
-        # ✨ 讀取休假限制 (支援文字格式 & 姓名對照)
+        # ✨ 讀取休假限制 (忽略年份，只看月日)
         leave_constraints = []
         try:
-            # 建立 姓名 -> ID 的對照表
             name_to_id = {}
             if 'Name' in df_roster.columns and 'ID' in df_roster.columns:
                 for _, r in df_roster.iterrows():
@@ -538,16 +535,14 @@ if uploaded_file is not None:
                 for _, r in df_leave.iterrows():
                     try:
                         raw_id = clean_str(r['ID'])
-                        # 如果 ID 欄位填的是姓名，嘗試轉為 ID
                         l_sid = name_to_id.get(raw_id, raw_id)
 
                         l_date = pd.to_datetime(r['LimitDate'])
-                        
-                        # ✨ 使用 extract_number 解析 "2例" -> 2
                         l_min_ex = extract_number(r.get('MinExample', 0))
                         l_min_re = extract_number(r.get('MinRest', 0))
 
-                        if l_date.year == y and l_date.month == m:
+                        # ✨ 只檢查月份 (忽略年份)
+                        if l_date.month == m:
                             leave_constraints.append({
                                 'sid': l_sid,
                                 'date': l_date,
@@ -568,6 +563,9 @@ if uploaded_file is not None:
         
         if leave_constraints:
             st.success(f"🛡️ 已讀取 {len(leave_constraints)} 條指定日期【例休】限制")
+            with st.expander("🔍 查看已讀取的例休限制 (前 5 筆)"):
+                for i, lc in enumerate(leave_constraints[:5]):
+                    st.write(f"#{i+1}: 員工 {lc['sid']} 在 {lc['date'].month}/{lc['date'].day} 前，至少休 {lc['min_ex']}例 + {lc['min_re']}休")
 
         mask = (df_shifts['Date'].dt.year == y) & (df_shifts['Date'].dt.month == m)
         m_shifts = df_shifts[mask].copy()
@@ -679,7 +677,7 @@ if uploaded_file is not None:
                             if v1 is not None and fix2 == s2:
                                 model.Add(v1 == 0)
 
-                # ✨ 應用【例休】限制
+                # ✨ 應用【例休】限制 (嚴格等於)
                 for lc in leave_constraints:
                     sid = lc['sid']
                     limit_d = lc['date'].day
@@ -688,22 +686,25 @@ if uploaded_file is not None:
                     work_days_vars = []
                     current_range_days = [d for d in v_days if d <= limit_d]
                     total_days_in_range = len(current_range_days)
-                    max_work_days = total_days_in_range - req_off
                     
-                    if max_work_days < 0: max_work_days = 0
-
+                    # 計算目標工作天數：總天數 - 要求休假天數
+                    target_work_days = total_days_in_range - req_off
+                    
+                    # 先扣除已經固定排班的工作天數
                     for d in current_range_days:
                         fv = fixed.get((sid, d), "")
                         if fv:
                             if is_working_day(fv): 
-                                max_work_days -= 1 
+                                target_work_days -= 1 
                         elif (sid, d) in lookup:
                              work_days_vars.extend(lookup[(sid, d)])
                     
-                    if max_work_days < 0:
+                    if target_work_days < 0:
                         st.warning(f"⚠️ 警告：員工 {sid} 在 {limit_d} 號前已被固定班表塞滿，無法滿足【例休】要求！")
                     elif work_days_vars:
-                        model.Add(sum(work_days_vars) <= max_work_days)
+                        # ✨ 關鍵修改：使用 == (等於) 而不是 <=
+                        # 這樣才能確保休假天數「不能多也不能少」
+                        model.Add(sum(work_days_vars) == target_work_days)
 
                 status = solver.Solve(model)
 
