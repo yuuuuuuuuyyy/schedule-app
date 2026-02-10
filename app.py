@@ -89,17 +89,19 @@ def smart_rename(df, mapping):
         df = df.rename(columns=new_columns)
     return df
 
-# --- 班別屬性判斷 (嚴格定義修正) ---
+# --- 班別屬性判斷 ---
 def is_mandatory_off(shift_name):
+    # 嚴格判斷 9例
     return str(shift_name).strip() == "9例"
 
 def is_regular_rest(shift_name):
+    # 嚴格判斷 9
     return str(shift_name).strip() == "9"
 
 def is_rest_day(shift_name):
     """
     判斷是否為休息日。
-    嚴格規則：只有以 '9' 開頭的班別才是休息日。
+    依據用戶規則：只有 '9' 開頭的才是休息日。
     '01', '01特', '特' 等皆視為上班日。
     """
     s = str(shift_name).strip()
@@ -109,7 +111,7 @@ def is_rest_day(shift_name):
     # 只有 9 開頭算休息 (例如 9, 9例)
     if s.startswith("9"): return True
     
-    # 其他全部算上班 (包含 01, 01特, 8-5)
+    # 其他全部算上班
     return False
 
 def is_working_day(shift_name):
@@ -644,7 +646,7 @@ if uploaded_file is not None:
                         v = model.NewBoolVar(f"{sid}_{d}_{s}")
                         vars[(sid, d, s)] = v
                         grp.append(v)
-                        # ✨ 修改：lookup 改存 (shift_name, var) tuple
+                        # ✨ 修改：lookup 改存 (shift_name, var) tuple，方便後續篩選
                         if (sid, d) not in lookup: lookup[(sid, d)] = []
                         lookup[(sid, d)].append((target_shift, v)) 
                         obj.append(v * random.randint(100, 200)) 
@@ -667,7 +669,6 @@ if uploaded_file is not None:
                             val = 0 if is_rest_day(fv) else 1
                         elif (sid, d) in lookup: 
                             # 找出當天所有 "工作班" 的變數並加總
-                            # lookup[(sid, d)] = [(s1, v1), (s2, v2)...]
                             working_vars = [v for (s, v) in lookup[(sid, d)] if is_working_day(s)]
                             val = sum(working_vars)
                         else: 
@@ -695,37 +696,44 @@ if uploaded_file is not None:
                             if v1 is not None and fix2 == s2:
                                 model.Add(v1 == 0)
 
-                # ✨ 應用【例休】限制 (嚴格等於)
+                # ✨ 應用【例休】限制 (直球對決版：直接數 9例 和 9)
                 for lc in leave_constraints:
                     sid = lc['sid']
                     limit_d = lc['date'].day
-                    req_off = lc['min_ex'] + lc['min_re'] 
+                    target_9li = lc['min_ex'] # 目標 9例 數量
+                    target_9 = lc['min_re']   # 目標 9 數量
                     
-                    work_days_vars = []
+                    # 收集變數的容器
+                    vars_9li = []
+                    vars_9 = []
+                    
                     current_range_days = [d for d in v_days if d <= limit_d]
-                    total_days_in_range = len(current_range_days)
                     
-                    # 計算目標工作天數：總天數 - 要求休假天數
-                    target_work_days = total_days_in_range - req_off
-                    
-                    # 先扣除已經固定排班的工作天數
+                    # 先扣除已經固定排班 (Roster 中已填寫的)
                     for d in current_range_days:
                         fv = fixed.get((sid, d), "")
                         if fv:
-                            if is_working_day(fv): 
-                                target_work_days -= 1 
+                            if str(fv) == "9例": target_9li -= 1
+                            if str(fv) == "9": target_9 -= 1
+                        
                         elif (sid, d) in lookup:
-                             # lookup 結構現在是 [(shift_name, var), ...]
-                             # 只把 "工作班" 的變數拿出來加
+                             # 從候選變數中，把 9例 和 9 分別抓出來
                              for s_name, var in lookup[(sid, d)]:
-                                 if is_working_day(s_name):
-                                     work_days_vars.append(var)
+                                 if str(s_name) == "9例":
+                                     vars_9li.append(var)
+                                 elif str(s_name) == "9":
+                                     vars_9.append(var)
                     
-                    if target_work_days < 0:
-                        st.warning(f"⚠️ 警告：員工 {sid} 在 {limit_d} 號前已被固定班表塞滿，無法滿足【例休】要求！")
-                    elif work_days_vars:
-                        # ✨ 關鍵：嚴格等於 (強迫 AI 排滿工作日，不能偷懶多休)
-                        model.Add(sum(work_days_vars) == target_work_days)
+                    # 執行約束：剩餘需要的數量必須由變數填滿 (嚴格等於)
+                    if target_9li < 0:
+                        st.warning(f"⚠️ 警告：員工 {sid} 的『9例』已被固定班表排超過了！")
+                    else:
+                        model.Add(sum(vars_9li) == target_9li)
+
+                    if target_9 < 0:
+                        st.warning(f"⚠️ 警告：員工 {sid} 的『9』已被固定班表排超過了！")
+                    else:
+                        model.Add(sum(vars_9) == target_9)
 
                 status = solver.Solve(model)
 
