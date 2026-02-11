@@ -397,11 +397,28 @@ with st.sidebar:
     
     with st.expander("🛠️ 快速生成每月需求表 (Shifts)"):
         st.caption("勾選平日/假日需要的班別，自動產生整個月的 Excel！")
-        all_shifts = ["8-4'F", "8-5", "12'-9", "4-12","8-4'掃","8-4'銷","8-4'","8-5銷", "8-5掃", "01", "01特", "9", "9例"]
+        # 定義完整的班別清單 (確保無重複、無多餘空格)
+        all_shifts = [
+            "8-4'F", "8-5", "12'-9", "4-12", "8-4'掃", 
+            "8-4'銷", "8-4'", "8-5銷", "8-5掃", 
+            "01", "01特", "9", "9例"
+        ]
+        
         st.write("🗓️ **平日 (週一~週五)**:")
-        wd_shifts = st.multiselect("平日班別", all_shifts, default=["8-4'F", "8-5", "12'-9", "4-12", "8-5掃", "01"])
+        # 確保 default 中的每個項目都存在於 all_shifts 中
+        wd_default = ["8-4'F", "8-5", "12'-9", "4-12", "8-5掃", "01"]
+        # 過濾掉不在 all_shifts 中的預設值 (防呆)
+        wd_default = [x for x in wd_default if x in all_shifts]
+        
+        wd_shifts = st.multiselect("平日班別", all_shifts, default=wd_default)
+
         st.write("🎉 **假日 (週六、週日)**:")
-        we_shifts = st.multiselect("假日班別", all_shifts, default=["8-4'F","8-4'", "4-12", "8-4'掃"])
+        # 確保 default 中的每個項目都存在於 all_shifts 中
+        we_default = ["8-4'F", "8-4'", "4-12", "8-4'掃"]
+        # 過濾掉不在 all_shifts 中的預設值 (防呆)
+        we_default = [x for x in we_default if x in all_shifts]
+        
+        we_shifts = st.multiselect("假日班別", all_shifts, default=we_default)
 
         if st.button("⚡ 生成並準備下載"):
             try:
