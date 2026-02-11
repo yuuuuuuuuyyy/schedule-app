@@ -242,35 +242,27 @@ def auto_calculate_last_consecutive_from_upload(uploaded_file, prev_year, prev_m
     except Exception as e:
         return {}, f"讀取上月錯誤: {e}"
 
-# ✨ 修改功能：產生動態天數的範本檔
 def create_template_excel(year, month):
     output = io.BytesIO()
     wb = openpyxl.Workbook()
     
-    # 取得該月有幾天 (例如 4月回傳 30, 2月回傳 28)
     _, num_days = calendar.monthrange(year, month)
     
-    # 1. Staff 分頁
     ws1 = wb.active
     ws1.title = "Staff"
     ws1.append(["ID", "Name", "Skills"])
     ws1.append(["1800", "範例員工", "8-4'F,8-5"]) 
 
-    # 2. Roster 分頁 (動態生成天數)
     ws2 = wb.create_sheet("Roster")
-    # 標題: ID, Name, 1 ~ num_days
     header = ["ID", "Name"] + [str(i) for i in range(1, num_days + 1)]
     ws2.append(header)
     ws2.append(["1800", "範例員工"] + [""] * num_days)
 
-    # 3. Shifts 分頁 (產生該月每一天的範例)
     ws3 = wb.create_sheet("Shifts")
     ws3.append(["Date", "Shift", "Count"])
-    # 自動產生該月第 1 天的範例日期
     example_date = f"{year}/{month}/1"
     ws3.append([example_date, "8-5", 1])
 
-    # 4. ShiftTime 分頁
     ws4 = wb.create_sheet("ShiftTime")
     ws4.append(["Code", "Start", "End"])
     ws4.append(["8-5", 8, 17])
@@ -286,11 +278,10 @@ def generate_formatted_excel(df, year, month):
     ws = wb.active
     ws.title = "Final_Schedule"
     
-    # 🎨 定義顏色樣式
-    fill_big_blue = PatternFill(start_color="DCE6F1", end_color="DCE6F1", fill_type="solid") # 淺藍
-    fill_big_orange = PatternFill(start_color="FDE9D9", end_color="FDE9D9", fill_type="solid") # 淺橘
-    fill_small_pink = PatternFill(start_color="F2DCDB", end_color="F2DCDB", fill_type="solid") # 淺粉
-    fill_small_purple = PatternFill(start_color="E4DFEC", end_color="E4DFEC", fill_type="solid") # 淺紫
+    fill_big_blue = PatternFill(start_color="DCE6F1", end_color="DCE6F1", fill_type="solid")
+    fill_big_orange = PatternFill(start_color="FDE9D9", end_color="FDE9D9", fill_type="solid")
+    fill_small_pink = PatternFill(start_color="F2DCDB", end_color="F2DCDB", fill_type="solid")
+    fill_small_purple = PatternFill(start_color="E4DFEC", end_color="E4DFEC", fill_type="solid")
     
     weekday_map = {0: '一', 1: '二', 2: '三', 3: '四', 4: '五', 5: '六', 6: '日'}
     headers = list(df.columns)
@@ -358,25 +349,27 @@ def create_preview_df(df, year, month):
 
 # --- 3. 主程式介面 ---
 
-# ✨ 側邊欄設計
 with st.sidebar:
     st.title("⚙️ 排班設定面板")
     
-    # 1. 先讓使用者選擇年月
+    # --- ✨ 修改處：新增年份範圍與自動定位 ---
     c1, c2 = st.columns(2)
     with c1: 
-        this_year = datetime.now().year
-        y = st.selectbox("年份", [this_year, this_year+1], index=0)
+        now = datetime.now()
+        this_year = now.year
+        # 設定年份範圍：去年到未來10年
+        year_options = list(range(this_year - 1, this_year + 11))
+        # 預設選中「今年」在選單中的位置
+        default_year_idx = year_options.index(this_year)
+        y = st.selectbox("年份", year_options, index=default_year_idx)
     with c2: 
-        m = st.selectbox("月份", range(1,13), index=3) # 預設 4月
+        # 預設選中「本月」
+        m = st.selectbox("月份", range(1, 13), index=now.month - 1)
 
     st.divider()
 
-    # 2. 範本下載按鈕
     st.write("📝 **初次使用？請先下載範本**")
-    
     template_data = create_template_excel(y, m) 
-    
     st.download_button(
         label="📥 下載排班範本",
         data=template_data,
@@ -384,18 +377,13 @@ with st.sidebar:
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
     
-    # 🌟 新功能：快速生成需求表
     with st.expander("🛠️ 快速生成每月需求表 (Shifts)"):
         st.caption("勾選平日/假日需要的班別，自動產生整個月的 Excel！")
-        
-        # 班別清單 (你可以自己加)
         all_shifts = ["8-4' F", "8-5", "12' -9", "4-12", "8-5掃", "01", "01特", "9", "9例"]
-        
         st.write("🗓️ **平日 (週一~週五)**:")
         wd_shifts = st.multiselect("平日班別", all_shifts, default=["8-4' F", "8-5", "12' -9", "4-12", "8-5掃", "01"])
-        
         st.write("🎉 **假日 (週六、週日)**:")
-        we_shifts = st.multiselect("假日班別", all_shifts, default=["8-4' F", "4-12", "8-4' F"]) # 預設值可改
+        we_shifts = st.multiselect("假日班別", all_shifts, default=["8-4' F", "4-12", "8-4' F"])
 
         if st.button("⚡ 生成並準備下載"):
             try:
@@ -404,22 +392,14 @@ with st.sidebar:
                 for day_gen in range(1, num_days + 1):
                     dt_gen = datetime(y, m, day_gen)
                     date_str = dt_gen.strftime("%Y/%-m/%-d")
-                    
-                    # 判斷平假日 (5=週六, 6=週日)
-                    if dt_gen.weekday() >= 5:
-                        target_shifts = we_shifts
-                    else:
-                        target_shifts = wd_shifts
-                    
+                    if dt_gen.weekday() >= 5: target_shifts = we_shifts
+                    else: target_shifts = wd_shifts
                     for s_name in target_shifts:
                         data_gen.append([date_str, s_name, 1])
-                
                 df_gen = pd.DataFrame(data_gen, columns=["Date", "Shift", "Count"])
                 output_gen = io.BytesIO()
-                # 使用 xlsxwriter 引擎寫入 (Streamlit 支援度好)
                 with pd.ExcelWriter(output_gen, engine='xlsxwriter') as writer:
                     df_gen.to_excel(writer, sheet_name='Shifts', index=False)
-                
                 st.download_button(
                     label=f"📥 下載 {m}月需求表",
                     data=output_gen.getvalue(),
@@ -430,13 +410,9 @@ with st.sidebar:
                 st.error(f"生成失敗: {e}")
 
     st.divider()
-
-    # 3. 上傳區
     uploaded_file = st.file_uploader("📂 請上傳 Excel 排班表 (data.xlsx)", type=['xlsx'])
-    
     st.info("💡 **週期上色說明**：\n- 日期列：28天大週期 (藍/橘)\n- 星期列：14天小週期 (粉/紫)")
 
-# ✨ 主畫面設計
 st.title("📅 智慧排班系統")
 st.markdown("---")
 
@@ -505,10 +481,8 @@ if uploaded_file is not None:
         sids = df_roster['ID'].tolist()
         last_con, msg = auto_calculate_last_consecutive_from_upload(uploaded_file, py, pm, sids)
         
-        if "找不到" in msg: 
-            st.warning(f"⚠️ {msg}")
-        else: 
-            st.success(f"✅ {msg}")
+        if "找不到" in msg: st.warning(f"⚠️ {msg}")
+        else: st.success(f"✅ {msg}")
 
         mask = (df_shifts['Date'].dt.year == y) & (df_shifts['Date'].dt.month == m)
         m_shifts = df_shifts[mask].copy()
@@ -532,12 +506,8 @@ if uploaded_file is not None:
                         t1 = shift_time_db[s1]
                         t2 = shift_time_db[s2]
                         rest = (t2['Start'] + 24) - t1['End']
-                        if rest < 11:
-                            forbidden_pairs.add((s1, s2))
-                
-                # 手動加入禁止規則
+                        if rest < 11: forbidden_pairs.add((s1, s2))
                 forbidden_pairs.add(('4-12', "12'-9"))
-                
                 if forbidden_pairs:
                     with st.expander(f"🛡️ 已啟動法規防護 ({len(forbidden_pairs)} 條規則)"):
                         st.write(list(forbidden_pairs))
@@ -592,12 +562,9 @@ if uploaded_file is not None:
                     curr = []
                     for d in v_days:
                         fv = fixed.get((sid, d), "")
-                        if fv: 
-                            val = 0 if is_rest_day(fv) else 1
-                        elif (sid, d) in lookup: 
-                            val = sum(lookup[(sid, d)])
-                        else: 
-                            val = 0 
+                        if fv: val = 0 if is_rest_day(fv) else 1
+                        elif (sid, d) in lookup: val = sum(lookup[(sid, d)])
+                        else: val = 0 
                         curr.append(val)
                     full = pre + curr
                     if len(full) >= w_size:
@@ -612,20 +579,14 @@ if uploaded_file is not None:
                         fix1 = fixed.get((sid, d1))
                         fix2 = fixed.get((sid, d2))
                         for s1, s2 in forbidden_pairs:
-                            v1 = vars.get((sid, d1, s1))
-                            v2 = vars.get((sid, d2, s2))
-                            if v1 is not None and v2 is not None:
-                                model.AddBoolOr([v1.Not(), v2.Not()])
-                            if fix1 == s1 and v2 is not None:
-                                model.Add(v2 == 0)
-                            if v1 is not None and fix2 == s2:
-                                model.Add(v1 == 0)
+                            v1 = vars.get((sid, d1, s1)); v2 = vars.get((sid, d2, s2))
+                            if v1 is not None and v2 is not None: model.AddBoolOr([v1.Not(), v2.Not()])
+                            if fix1 == s1 and v2 is not None: model.Add(v2 == 0)
+                            if v1 is not None and fix2 == s2: model.Add(v1 == 0)
 
                 status = solver.Solve(model)
 
             if status in [cp_model.OPTIMAL, cp_model.FEASIBLE]:
-                # 特效已移除，保持畫面專業
-                
                 df_fin = df_roster.copy().set_index('ID')
                 for (sid, d, s), v in vars.items():
                     if solver.Value(v): df_fin.at[sid, str(d)] = s
@@ -634,43 +595,32 @@ if uploaded_file is not None:
                 for idx, r in df_fin.iterrows():
                     sid = r['ID']
                     user_skills = skills_map.get(sid, set())
-                    if "不排班" in user_skills: fill = ""
-                    else: fill = "9"
+                    fill = "" if "不排班" in user_skills else "9"
                     for d in v_days:
                         val = str(r[str(d)]).strip()
-                        if val in ['','nan','None','0']:
-                            df_fin.at[idx, str(d)] = fill
+                        if val in ['','nan','None','0']: df_fin.at[idx, str(d)] = fill
 
-                df_fin, logs = apply_strict_labor_rules(df_fin, y, m, last_con)
+                df_fin, _ = apply_strict_labor_rules(df_fin, y, m, last_con)
                 cols = ['ID', 'Name'] + [str(d) for d in v_days]
                 df_export = df_fin[cols].copy()
                 
                 kpi1, kpi2, kpi3 = st.columns(3)
-                with kpi1: st.metric("👥 參與排班人數", f"{len(sids)} 人")
-                with kpi2: st.metric("📅 排班總天數", f"{len(v_days)} 天")
-                with kpi3: st.metric("🛡️ 違規檢查", "0 錯誤", delta="Passed")
+                kpi1.metric("👥 參與排班人數", f"{len(sids)} 人")
+                kpi2.metric("📅 排班總天數", f"{len(v_days)} 天")
+                kpi3.metric("🛡️ 違規檢查", "0 錯誤", delta="Passed")
 
                 tab1, tab2 = st.tabs(["📊 排班結果預覽", "📥 下載 Excel"])
-                
                 with tab1:
                     df_preview = create_preview_df(df_export, y, m)
                     st.dataframe(df_preview, use_container_width=True)
-
                 with tab2:
                     xlsx_data = generate_formatted_excel(df_export, y, m)
                     fn = f"schedule_{y}_{m}_final.xlsx"
-                    st.download_button(
-                        label=f"📥 下載排班結果 ({fn})",
-                        data=xlsx_data,
-                        file_name=fn,
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        type="primary"
-                    )
+                    st.download_button(label=f"📥 下載排班結果 ({fn})", data=xlsx_data, file_name=fn, mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", type="primary")
             else:
-                st.error("❌ 排班失敗：找不到可行解。建議檢查：1. 固定班是否已違反法規？ 2. 人力是否不足？")
+                st.error("❌ 排班失敗：找不到可行解。")
     except Exception as e:
         st.error(f"Error: {e}")
-        import traceback
-        st.text(traceback.format_exc())
+        st.text(f"詳細錯誤訊息：\n{e}")
 else:
     st.info("👋 歡迎使用！請先在左側側邊欄上傳您的 Excel 排班檔案。")
