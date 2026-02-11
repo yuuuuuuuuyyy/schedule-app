@@ -51,6 +51,7 @@ def clean_str(s):
     if pd.isna(s): return ""
     s = str(s).strip()
     if s.endswith(".0"): s = s[:-2]
+    # 強制把 "0" 當作空白，不讓它佔用格子
     if s in ["0", "nan", "None", ""]: return ""
     return s.replace(" ", "").replace("　", "").replace("’", "'").replace("‘", "'").replace("，", ",")
 
@@ -58,10 +59,8 @@ def clean_str(s):
 def extract_number(s):
     if pd.isna(s): return 0
     s_str = str(s)
-    # 針對純數字直接回傳
     if s_str.isdigit():
         return int(s_str)
-    # 針對文字混雜數字
     numbers = re.findall(r'\d+', s_str)
     if numbers:
         return int(numbers[0])
@@ -80,10 +79,7 @@ def parse_skills(skill_str):
     return valid_skills
 
 def smart_rename(df, mapping):
-    # 1. 清理欄位名稱：轉字串、去前後空白
     df.columns = df.columns.astype(str).str.strip()
-    
-    # 2. 強制去重：如果有重複欄位名，只保留第一個
     df = df.loc[:, ~df.columns.duplicated()]
     
     new_columns = {}
@@ -91,20 +87,17 @@ def smart_rename(df, mapping):
         col_str = str(col)
         found = False
         
-        # ✨ 策略 A：精確比對 (優先級最高)
-        # 只有當欄位名稱完全出現在關鍵字列表中時才替換
+        # 策略 A: 精確比對
         for target_name, keywords in mapping.items():
             if col_str in keywords:
                 new_columns[col] = target_name
                 found = True
                 break
         
-        # ✨ 策略 B：模糊比對 (次要)
-        # 只有在精確比對失敗時才使用，且避免短字串誤判
+        # 策略 B: 模糊比對
         if not found:
             for target_name, keywords in mapping.items():
                 for kw in keywords:
-                    # 只有當關鍵字長度 > 1 才允許模糊比對，避免 "9" 對應到 "9例"
                     if len(kw) > 1 and kw in col_str:
                         new_columns[col] = target_name
                         found = True
@@ -114,7 +107,6 @@ def smart_rename(df, mapping):
     if new_columns:
         df = df.rename(columns=new_columns)
     
-    # Rename 後再次去重
     df = df.loc[:, ~df.columns.duplicated()]
     return df
 
@@ -126,14 +118,9 @@ def is_regular_rest(shift_name):
     return str(shift_name).strip() == "9"
 
 def is_rest_day(shift_name):
-    """
-    判斷是否為休息日。
-    依據用戶規則：只有 '9' 開頭的才是休息日。
-    '01', '01特', '特' 等皆視為上班日。
-    """
     s = str(shift_name).strip()
     if not s: return True 
-    if s in ['休', '0', 'nan', 'None']: return True
+    if s in ['休', '0', 'nan', 'None', '']: return True
     if s.startswith("9"): return True
     return False
 
@@ -303,32 +290,27 @@ def auto_calculate_last_consecutive_from_upload(uploaded_file, prev_year, prev_m
     except Exception as e:
         return {}, {}, f"讀取上月錯誤: {e}"
 
-# ✨ 修改功能：更新範本格式
 def create_template_excel(year, month):
     output = io.BytesIO()
     wb = openpyxl.Workbook()
     
     _, num_days = calendar.monthrange(year, month)
     
-    # 1. Staff
     ws1 = wb.active
     ws1.title = "Staff"
     ws1.append(["ID", "Name", "Skills"])
     ws1.append(["1800", "範例員工", "8-4'F,8-5"]) 
 
-    # 2. Roster
     ws2 = wb.create_sheet("Roster")
     header = ["ID", "Name"] + [str(i) for i in range(1, num_days + 1)]
     ws2.append(header)
     ws2.append(["1800", "範例員工"] + [""] * num_days)
 
-    # 3. Shifts
     ws3 = wb.create_sheet("Shifts")
     ws3.append(["Date", "Shift", "Count"])
     example_date = f"{year}/{month}/1"
     ws3.append([example_date, "8-5", 1])
 
-    # 4. ShiftTime
     ws4 = wb.create_sheet("ShiftTime")
     ws4.append(["Code", "Start", "End"])
     ws4.append(["8-5", 8, 17])
@@ -336,9 +318,7 @@ def create_template_excel(year, month):
     ws4.append(["4-12", 16, 24])
     ws4.append(["12'-9", 12.5, 21])
 
-    # 5. 例休
     ws5 = wb.create_sheet("例休")
-    # ✨ 這裡配合您的圖片格式，使用 "9例數量" 和 "9數量"
     ws5.append(["ID", "日期", "9例數量", "9數量"]) 
     ws5.append(["1800", f"{year}/{month}/15", 2, 2])
     
@@ -543,15 +523,12 @@ if uploaded_file is not None:
             
             df_roster = pd.read_excel(uploaded_file, sheet_name='Roster', header=h_idx)
             df_roster = smart_rename(df_roster, {'ID':['ID','卡號'], 'Name':['Name','姓名','員工']})
-            
             if 'ID' not in df_roster.columns:
                  st.error("❌ Roster 工作表找不到 'ID' 或 '卡號' 欄位。")
                  st.stop()
             if 'Name' not in df_roster.columns: df_roster['Name'] = df_roster['ID']
-            
             df_roster = df_roster.loc[:, ~df_roster.columns.duplicated()]
             df_roster['ID'] = df_roster['ID'].apply(clean_str)
-            
             d_map = {}
             v_days = []
             for c in df_roster.columns:
@@ -567,13 +544,10 @@ if uploaded_file is not None:
                         d_map[c] = str(t.day)
                         v_days.append(t.day)
                     except: pass
-            
             df_roster = df_roster.rename(columns=d_map)
             df_roster = df_roster.loc[:, ~df_roster.columns.duplicated()]
             v_days = sorted(list(set(v_days)))
-            
             for d in v_days: df_roster[str(d)] = df_roster[str(d)].apply(clean_str)
-            
         except Exception as e:
             st.error(f"❌ 讀取 Roster 失敗: {e}")
             st.stop()
@@ -645,8 +619,7 @@ if uploaded_file is not None:
             st.success(f"🛡️ 已讀取 {len(leave_constraints)} 條指定日期【例休】限制")
             with st.expander("🔍 查看已讀取的例休限制 (前 5 筆)"):
                 for i, lc in enumerate(leave_constraints[:5]):
-                    # 這裡會顯示讀取到的數值，方便您核對
-                    st.write(f"#{i+1}: 員工 {lc['sid']} 在 {lc['date'].month}/{lc['date'].day} 前，必須剛好排 {lc['min_ex']}例 + {lc['min_re']}休")
+                    st.write(f"#{i+1}: 員工 {lc['sid']} 在 {lc['date'].month}/{lc['date'].day} 前，必須盡可能排 {lc['min_ex']}例 + {lc['min_re']}休")
 
         with st.expander("🔍 資料讀取診斷報告 (若排班失敗請點此)"):
             st.write(f"**偵測到的標題列索引**: {h_idx}")
@@ -687,34 +660,44 @@ if uploaded_file is not None:
                         st.write(list(forbidden_pairs))
             except: pass
 
-            pre_check_fail = False
+            # --- ✨ 數學衝突偵測器 (僅警告不中斷) ---
             fixed_check = {}
             for _, r in df_roster.iterrows():
                 sid = r['ID']
                 for d in v_days:
                     v_obj = r[str(d)]
                     if isinstance(v_obj, pd.Series): v_obj = v_obj.iloc[0]
-                    v = str(v_obj).strip()
-                    if v not in ["", "nan", "None"]:
+                    v = clean_str(v_obj) 
+                    if v != "":
                         fixed_check[(sid, d)] = v
 
             for lc in leave_constraints:
                 sid = lc['sid']
                 limit_d = lc['date'].day
-                target_off = lc['min_ex'] + lc['min_re'] 
-                total_days = len([d for d in v_days if d <= limit_d]) 
-                max_work = total_days - target_off 
+                req_ex = lc['min_ex']
+                req_re = lc['min_re']
                 
-                current_fixed_work = 0
-                for d in v_days:
-                    if d <= limit_d:
-                        fv = fixed_check.get((sid, d))
-                        if fv and is_working_day(fv):
-                            current_fixed_work += 1
+                fixed_ex_cnt = 0
+                fixed_re_cnt = 0
+                empty_slots = 0
                 
-                if current_fixed_work > max_work:
-                    st.error(f"❌ **嚴重衝突**：員工 {sid} 在 {limit_d} 號前，您設定必須休 {target_off} 天（只能上 {max_work} 天班），但在 Roster 中已經手動排了 {current_fixed_work} 天班！請減少手動排班或放寬休假限制。")
-                    pre_check_fail = True
+                current_range_days = [d for d in v_days if d <= limit_d]
+                for d in current_range_days:
+                    fv = fixed_check.get((sid, d), "")
+                    if fv == "9例": fixed_ex_cnt += 1
+                    elif fv == "9": fixed_re_cnt += 1
+                    elif fv == "": empty_slots += 1
+                
+                if fixed_ex_cnt > req_ex:
+                    st.warning(f"⚠️ **注意**：員工 {sid} 在 {limit_d} 號前，Roster 已固定 {fixed_ex_cnt} 個「9例」，超過限制的 {req_ex} 個 (將保留現狀)。")
+                if fixed_re_cnt > req_re:
+                    st.warning(f"⚠️ **注意**：員工 {sid} 在 {limit_d} 號前，Roster 已固定 {fixed_re_cnt} 個「9」，超過限制的 {req_re} 個 (將保留現狀)。")
+                
+                needed_ex = max(0, req_ex - fixed_ex_cnt)
+                needed_re = max(0, req_re - fixed_re_cnt)
+                
+                if needed_ex + needed_re > empty_slots:
+                    st.warning(f"⚠️ **空間不足**：員工 {sid} 在 {limit_d} 號前還缺 {needed_ex}個9例、{needed_re}個9，但只剩 {empty_slots} 個空格 (將盡量排入)。")
 
             for sid, last_shift in last_shift_map.items():
                 if last_shift:
@@ -722,11 +705,7 @@ if uploaded_file is not None:
                         if clean_str(last_shift) == s1:
                             fv_1 = fixed_check.get((sid, 1))
                             if fv_1 and clean_str(fv_1) == s2:
-                                st.error(f"❌ **跨月衝突**：員工 {sid} 上個月最後一天是 {s1}，但這個月 1 號固定排了 {s2}，違反休息規定！")
-                                pre_check_fail = True
-
-            if pre_check_fail:
-                st.stop() 
+                                st.warning(f"⚠️ **跨月衝突**：員工 {sid} 上個月最後一天是 {s1}，但這個月 1 號固定排了 {s2}，違反休息規定！")
 
             with st.spinner("⏳ AI 正在運算最佳排班組合..."):
                 model = cp_model.CpModel()
@@ -738,9 +717,8 @@ if uploaded_file is not None:
                     for d in v_days:
                         v_obj = r[str(d)]
                         if isinstance(v_obj, pd.Series): v_obj = v_obj.iloc[0]
-                        v = str(v_obj).strip()
-                        
-                        if v not in ["", "nan", "None"]:
+                        v = clean_str(v_obj) # ✨ 使用 clean_str 處理 "0"
+                        if v != "":
                             fixed[(sid, d)] = v
 
                 needed = []
@@ -775,7 +753,13 @@ if uploaded_file is not None:
                         grp.append(v)
                         if (sid, d) not in lookup: lookup[(sid, d)] = []
                         lookup[(sid, d)].append((target_shift, v)) 
-                        obj.append(v * random.randint(100, 200)) 
+                        
+                        # ✨ 關鍵修改：給休假班極高權重，實現「盡可能排入」
+                        w = random.randint(100, 200)
+                        if target_shift in ["9", "9例", "01特"]:
+                            w += 5000 
+                        obj.append(v * w)
+                        
                     if grp: model.Add(sum(grp) <= c)
 
                 model.Maximize(sum(obj))
@@ -851,15 +835,15 @@ if uploaded_file is not None:
                                  elif str(s_name) == "9":
                                      vars_9.append(var)
                     
-                    if target_9li < 0:
-                        pass 
-                    else:
-                        model.Add(sum(vars_9li) == target_9li)
-
-                    if target_9 < 0:
-                        pass 
-                    else:
-                        model.Add(sum(vars_9) == target_9)
+                    # ✨ 關鍵修改：改用 <= (小於等於)，且不報錯
+                    # 因為變數權重很高，AI 會自動嘗試填滿到 target_9li
+                    remaining_quota_9li = max(0, target_9li)
+                    remaining_quota_9 = max(0, target_9)
+                    
+                    if vars_9li:
+                        model.Add(sum(vars_9li) <= remaining_quota_9li)
+                    if vars_9:
+                        model.Add(sum(vars_9) <= remaining_quota_9)
 
                 status = solver.Solve(model)
 
