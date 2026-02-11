@@ -51,7 +51,7 @@ def clean_str(s):
     if pd.isna(s): return ""
     s = str(s).strip()
     if s.endswith(".0"): s = s[:-2]
-    # 強制把 "0" 當作空白，不讓它佔用格子
+    # ✨✨✨ 強力過濾：把 "0" 當作空白，解鎖格子 ✨✨✨
     if s in ["0", "nan", "None", ""]: return ""
     return s.replace(" ", "").replace("　", "").replace("’", "'").replace("‘", "'").replace("，", ",")
 
@@ -120,6 +120,7 @@ def is_regular_rest(shift_name):
 def is_rest_day(shift_name):
     s = str(shift_name).strip()
     if not s: return True 
+    # ✨ 這裡也加上 "0" 的判斷，確保萬無一失
     if s in ['休', '0', 'nan', 'None', '']: return True
     if s.startswith("9"): return True
     return False
@@ -510,15 +511,12 @@ if uploaded_file is not None:
         try:
             df_tmp = pd.read_excel(uploaded_file, sheet_name='Roster', header=None, nrows=20)
             h_idx = -1
-            found_header = False
             target_keywords = ["ID", "卡號", "員工", "姓名", "Name"]
             for i, r in df_tmp.iterrows():
                 row_str = " ".join([str(v) for v in r.values])
                 if any(kw in row_str for kw in target_keywords):
                     h_idx = i
-                    found_header = True
                     break
-            
             if h_idx == -1: h_idx = 0 
             
             df_roster = pd.read_excel(uploaded_file, sheet_name='Roster', header=h_idx)
@@ -560,7 +558,6 @@ if uploaded_file is not None:
             st.error(f"❌ 讀取 Shifts 失敗: {e}")
             st.stop()
 
-        # ✨ 讀取休假限制 (針對新標題 "9例數量", "9數量" 做最佳化)
         leave_constraints = []
         try:
             name_to_id = {}
@@ -583,15 +580,13 @@ if uploaded_file is not None:
                 df_leave = smart_rename(df_leave, {
                     'ID': ['ID', '卡號'], 
                     'LimitDate': ['LimitDate', '指定日期', '日期'], 
-                    # ✨ 關鍵修改：將您的 Excel 標題加入關鍵字
-                    'MinExample': ['9例數量', '至少9例', 'MinExample'], 
-                    'MinRest': ['9數量', '至少9', 'MinRest']
+                    'MinExample': ['MinExample', 'Min9Example', '至少9例', '9例數量'], 
+                    'MinRest': ['MinRest', 'Min9', '至少9', '9數量']
                 })
                 for _, r in df_leave.iterrows():
                     try:
                         raw_id = clean_str(r['ID'])
                         l_sid = name_to_id.get(raw_id, raw_id)
-
                         l_date = pd.to_datetime(r['LimitDate'])
                         l_min_ex = extract_number(r.get('MinExample', 0))
                         l_min_re = extract_number(r.get('MinRest', 0))
@@ -667,6 +662,7 @@ if uploaded_file is not None:
                 for d in v_days:
                     v_obj = r[str(d)]
                     if isinstance(v_obj, pd.Series): v_obj = v_obj.iloc[0]
+                    # ✨ 這裡也要用 clean_str 過濾 0
                     v = clean_str(v_obj) 
                     if v != "":
                         fixed_check[(sid, d)] = v
@@ -717,7 +713,8 @@ if uploaded_file is not None:
                     for d in v_days:
                         v_obj = r[str(d)]
                         if isinstance(v_obj, pd.Series): v_obj = v_obj.iloc[0]
-                        v = clean_str(v_obj) # ✨ 使用 clean_str 處理 "0"
+                        # ✨ 使用 clean_str 處理 "0"
+                        v = clean_str(v_obj) 
                         if v != "":
                             fixed[(sid, d)] = v
 
@@ -754,7 +751,6 @@ if uploaded_file is not None:
                         if (sid, d) not in lookup: lookup[(sid, d)] = []
                         lookup[(sid, d)].append((target_shift, v)) 
                         
-                        # ✨ 關鍵修改：給休假班極高權重，實現「盡可能排入」
                         w = random.randint(100, 200)
                         if target_shift in ["9", "9例", "01特"]:
                             w += 5000 
@@ -835,8 +831,6 @@ if uploaded_file is not None:
                                  elif str(s_name) == "9":
                                      vars_9.append(var)
                     
-                    # ✨ 關鍵修改：改用 <= (小於等於)，且不報錯
-                    # 因為變數權重很高，AI 會自動嘗試填滿到 target_9li
                     remaining_quota_9li = max(0, target_9li)
                     remaining_quota_9 = max(0, target_9)
                     
