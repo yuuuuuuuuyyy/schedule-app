@@ -58,6 +58,10 @@ def clean_str(s):
 def extract_number(s):
     if pd.isna(s): return 0
     s_str = str(s)
+    # 針對純數字直接回傳
+    if s_str.isdigit():
+        return int(s_str)
+    # 針對文字混雜數字
     numbers = re.findall(r'\d+', s_str)
     if numbers:
         return int(numbers[0])
@@ -76,10 +80,10 @@ def parse_skills(skill_str):
     return valid_skills
 
 def smart_rename(df, mapping):
-    # 1. 先清理欄位名稱
+    # 1. 清理欄位名稱：轉字串、去前後空白
     df.columns = df.columns.astype(str).str.strip()
     
-    # 2. 強制去重
+    # 2. 強制去重：如果有重複欄位名，只保留第一個
     df = df.loc[:, ~df.columns.duplicated()]
     
     new_columns = {}
@@ -87,18 +91,21 @@ def smart_rename(df, mapping):
         col_str = str(col)
         found = False
         
-        # 精確比對
+        # ✨ 策略 A：精確比對 (優先級最高)
+        # 只有當欄位名稱完全出現在關鍵字列表中時才替換
         for target_name, keywords in mapping.items():
             if col_str in keywords:
                 new_columns[col] = target_name
                 found = True
                 break
         
-        # 模糊比對
+        # ✨ 策略 B：模糊比對 (次要)
+        # 只有在精確比對失敗時才使用，且避免短字串誤判
         if not found:
             for target_name, keywords in mapping.items():
                 for kw in keywords:
-                    if kw in col_str:
+                    # 只有當關鍵字長度 > 1 才允許模糊比對，避免 "9" 對應到 "9例"
+                    if len(kw) > 1 and kw in col_str:
                         new_columns[col] = target_name
                         found = True
                         break
@@ -107,7 +114,7 @@ def smart_rename(df, mapping):
     if new_columns:
         df = df.rename(columns=new_columns)
     
-    # Rename 後再次去重，防止多個欄位對應到同一個目標名稱
+    # Rename 後再次去重
     df = df.loc[:, ~df.columns.duplicated()]
     return df
 
@@ -119,6 +126,11 @@ def is_regular_rest(shift_name):
     return str(shift_name).strip() == "9"
 
 def is_rest_day(shift_name):
+    """
+    判斷是否為休息日。
+    依據用戶規則：只有 '9' 開頭的才是休息日。
+    '01', '01特', '特' 等皆視為上班日。
+    """
     s = str(shift_name).strip()
     if not s: return True 
     if s in ['休', '0', 'nan', 'None']: return True
@@ -324,9 +336,10 @@ def create_template_excel(year, month):
     ws4.append(["4-12", 16, 24])
     ws4.append(["12'-9", 12.5, 21])
 
-    # ✨ 5. 例休 (更新欄位名稱)
+    # 5. 例休
     ws5 = wb.create_sheet("例休")
-    ws5.append(["ID", "日期", "9例數量", "9數量"])  # 更新這裡
+    # ✨ 這裡配合您的圖片格式，使用 "9例數量" 和 "9數量"
+    ws5.append(["ID", "日期", "9例數量", "9數量"]) 
     ws5.append(["1800", f"{year}/{month}/15", 2, 2])
     
     ws5.column_dimensions['B'].width = 15
@@ -573,7 +586,7 @@ if uploaded_file is not None:
             st.error(f"❌ 讀取 Shifts 失敗: {e}")
             st.stop()
 
-        # ✨ 讀取休假限制 (更新為新標題)
+        # ✨ 讀取休假限制 (針對新標題 "9例數量", "9數量" 做最佳化)
         leave_constraints = []
         try:
             name_to_id = {}
@@ -596,9 +609,9 @@ if uploaded_file is not None:
                 df_leave = smart_rename(df_leave, {
                     'ID': ['ID', '卡號'], 
                     'LimitDate': ['LimitDate', '指定日期', '日期'], 
-                    # ✨ 關鍵修改：加入新標題
-                    'MinExample': ['MinExample', 'Min9Example', '至少9例', '9例數量'], 
-                    'MinRest': ['MinRest', 'Min9', '至少9', '9數量']
+                    # ✨ 關鍵修改：將您的 Excel 標題加入關鍵字
+                    'MinExample': ['9例數量', '至少9例', 'MinExample'], 
+                    'MinRest': ['9數量', '至少9', 'MinRest']
                 })
                 for _, r in df_leave.iterrows():
                     try:
@@ -632,6 +645,7 @@ if uploaded_file is not None:
             st.success(f"🛡️ 已讀取 {len(leave_constraints)} 條指定日期【例休】限制")
             with st.expander("🔍 查看已讀取的例休限制 (前 5 筆)"):
                 for i, lc in enumerate(leave_constraints[:5]):
+                    # 這裡會顯示讀取到的數值，方便您核對
                     st.write(f"#{i+1}: 員工 {lc['sid']} 在 {lc['date'].month}/{lc['date'].day} 前，必須剛好排 {lc['min_ex']}例 + {lc['min_re']}休")
 
         with st.expander("🔍 資料讀取診斷報告 (若排班失敗請點此)"):
