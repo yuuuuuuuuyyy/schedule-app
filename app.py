@@ -273,6 +273,7 @@ def create_template_excel(year, month):
     wb.save(output)
     return output.getvalue()
 
+# --- 修改處：新增統計功能的 Excel 生成函式 ---
 def generate_formatted_excel(df, year, month):
     wb = openpyxl.Workbook()
     ws = wb.active
@@ -287,6 +288,13 @@ def generate_formatted_excel(df, year, month):
     headers = list(df.columns)
     if 'Name' in headers: headers[headers.index('Name')] = '員工'
     
+    # [新增] 定義要統計的班別
+    stats_targets = ["9例", "9", "4-12", "12'-9"]
+    
+    # [新增] 將統計欄位加入表頭
+    ws.append(headers + stats_targets)
+    
+    # 處理星期列
     weekdays = []
     for col in headers:
         if col == 'ID': weekdays.append('')
@@ -297,21 +305,29 @@ def generate_formatted_excel(df, year, month):
                 dt = datetime(year, month, d)
                 weekdays.append(weekday_map[dt.weekday()])
             except: weekdays.append('')
+    # [新增] 星期列後方補空白
+    ws.append(weekdays + [""] * len(stats_targets))
     
-    ws.append(headers)
-    ws.append(weekdays)
-    
+    # [修改] 寫入資料並統計
     for r in df.values.tolist():
-        ws.append(r)
+        # 計算統計數據
+        stats_counts = []
+        for target in stats_targets:
+            count = r.count(target)
+            stats_counts.append(count if count > 0 else "")
+        # 寫入
+        ws.append(r + stats_counts)
         
     thin_border = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
     
+    # 格式化 (保持不變，只針對日期範圍上色)
     for row in ws.iter_rows():
         for cell in row:
             cell.alignment = Alignment(horizontal='center', vertical='center')
             cell.border = thin_border
             
-            if cell.row <= 2:
+            # 確保不會因為新增欄位導致索引超出範圍
+            if cell.row <= 2 and cell.column <= len(headers):
                 header_val = headers[cell.column - 1]
                 try:
                     d = int(header_val)
@@ -357,8 +373,8 @@ with st.sidebar:
     with c1: 
         now = datetime.now()
         this_year = now.year
-        # 設定年份範圍：去年到未來10年
-        year_options = list(range(this_year - 1, this_year + 11))
+        # 設定年份範圍：去年到未來5年
+        year_options = list(range(this_year - 1, this_year + 6))
         # 預設選中「今年」在選單中的位置
         default_year_idx = year_options.index(this_year)
         y = st.selectbox("年份", year_options, index=default_year_idx)
