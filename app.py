@@ -3,7 +3,6 @@ import pandas as pd
 import io
 import random
 import calendar
-import re
 from datetime import datetime, timedelta
 
 # --- 1. 環境檢查 ---
@@ -54,15 +53,6 @@ def clean_str(s):
     if s in ["0", "nan", "None", ""]: return ""
     return s.replace(" ", "").replace("　", "").replace("’", "'").replace("‘", "'").replace("，", ",")
 
-# 小工具：從 "2例" 或 "3休" 中提取數字
-def extract_number(s):
-    if pd.isna(s): return 0
-    s_str = str(s)
-    numbers = re.findall(r'\d+', s_str)
-    if numbers:
-        return int(numbers[0])
-    return 0
-
 def parse_skills(skill_str):
     if pd.isna(skill_str) or skill_str == "":
         return set()
@@ -87,8 +77,6 @@ def smart_rename(df, mapping):
                     break
     if new_columns:
         df = df.rename(columns=new_columns)
-    # 防護機制：移除重複欄位
-    df = df.loc[:, ~df.columns.duplicated()]
     return df
 
 # --- 班別屬性判斷 ---
@@ -99,16 +87,10 @@ def is_regular_rest(shift_name):
     return str(shift_name).strip() == "9"
 
 def is_rest_day(shift_name):
-    """
-    判斷是否為休息日。
-    只有 '9' 開頭的才是休息日。
-    '01', '01特', '特' 等皆視為上班日。
-    """
     s = str(shift_name).strip()
     if not s: return True 
     if s in ['休', '0', 'nan', 'None']: return True
-    if s.startswith("9"): return True
-    return False
+    return s.startswith("9")
 
 def is_working_day(shift_name):
     return not is_rest_day(shift_name)
@@ -214,7 +196,7 @@ def get_prev_month(year, month):
     return year, month - 1
 
 def auto_calculate_last_consecutive_from_upload(uploaded_file, prev_year, prev_month, current_staff_ids):
-    if uploaded_file is None: return {}, {}, "無上傳檔案"
+    if uploaded_file is None: return {}, "無上傳檔案"
     try:
         xls = pd.ExcelFile(uploaded_file)
         sheets = xls.sheet_names
@@ -224,7 +206,7 @@ def auto_calculate_last_consecutive_from_upload(uploaded_file, prev_year, prev_m
             if cand in sheets:
                 target_sheet = cand
                 break
-        if not target_sheet: return {}, {}, f"找不到 '{prev_month}月' 工作表 (無上月資料)"
+        if not target_sheet: return {}, f"找不到 '{prev_month}月' 工作表 (無上月資料)"
         
         df_prev = pd.read_excel(uploaded_file, sheet_name=target_sheet, dtype=str)
         header_row = -1
@@ -237,7 +219,7 @@ def auto_calculate_last_consecutive_from_upload(uploaded_file, prev_year, prev_m
              df_prev = pd.read_excel(uploaded_file, sheet_name=target_sheet, header=header_row, dtype=str)
         
         id_col = next((c for c in df_prev.columns if "ID" in str(c) or "卡號" in str(c)), None)
-        if not id_col: return {}, {}, "上月工作表無 ID 欄位"
+        if not id_col: return {}, "上月工作表無 ID 欄位"
         df_prev[id_col] = df_prev[id_col].apply(clean_str)
         
         day_cols = []
@@ -247,76 +229,54 @@ def auto_calculate_last_consecutive_from_upload(uploaded_file, prev_year, prev_m
             except: pass
         day_cols.sort(key=lambda x: int(float(str(x))))
         
-        last_consecutive = {}
-        last_shift_map = {} 
-        
+        res = {}
         for sid in current_staff_ids:
             row = df_prev[df_prev[id_col] == sid]
-            if row.empty: 
-                last_consecutive[sid] = 0
-                last_shift_map[sid] = None
-                continue
-            
-            # 1. 計算連續上班
+            if row.empty: res[sid] = 0; continue
             con = 0
             for c in reversed(day_cols):
-                val = row.iloc[0][c]
-                if isinstance(val, pd.Series): val = val.iloc[0]
-                if is_working_day(str(val)): con += 1
+                if is_working_day(str(row.iloc[0][c])): con += 1
                 else: break
-            last_consecutive[sid] = con
-
-            # 2. 抓取最後一天的班別
-            if day_cols:
-                last_val = row.iloc[0][day_cols[-1]]
-                if isinstance(last_val, pd.Series): last_val = last_val.iloc[0]
-                last_shift_map[sid] = clean_str(last_val)
-            else:
-                last_shift_map[sid] = None
-
-        return last_consecutive, last_shift_map, f"已銜接 '{target_sheet}' 工作表"
+            res[sid] = con
+        return res, f"已銜接 '{target_sheet}' 工作表"
     except Exception as e:
-        return {}, {}, f"讀取上月錯誤: {e}"
+        return {}, f"讀取上月錯誤: {e}"
 
-# ✨ 修改功能：更新範本格式
+# ✨ 修改功能：產生動態天數的範本檔
 def create_template_excel(year, month):
     output = io.BytesIO()
     wb = openpyxl.Workbook()
     
+    # 取得該月有幾天 (例如 4月回傳 30, 2月回傳 28)
     _, num_days = calendar.monthrange(year, month)
     
-    # 1. Staff
+    # 1. Staff 分頁
     ws1 = wb.active
     ws1.title = "Staff"
     ws1.append(["ID", "Name", "Skills"])
     ws1.append(["1800", "範例員工", "8-4'F,8-5"]) 
 
-    # 2. Roster
+    # 2. Roster 分頁 (動態生成天數)
     ws2 = wb.create_sheet("Roster")
+    # 標題: ID, Name, 1 ~ num_days
     header = ["ID", "Name"] + [str(i) for i in range(1, num_days + 1)]
     ws2.append(header)
     ws2.append(["1800", "範例員工"] + [""] * num_days)
 
-    # 3. Shifts
+    # 3. Shifts 分頁 (產生該月每一天的範例)
     ws3 = wb.create_sheet("Shifts")
     ws3.append(["Date", "Shift", "Count"])
+    # 自動產生該月第 1 天的範例日期
     example_date = f"{year}/{month}/1"
     ws3.append([example_date, "8-5", 1])
 
-    # 4. ShiftTime
+    # 4. ShiftTime 分頁
     ws4 = wb.create_sheet("ShiftTime")
     ws4.append(["Code", "Start", "End"])
     ws4.append(["8-5", 8, 17])
     ws4.append(["8-4'F", 8, 16.5])
     ws4.append(["4-12", 16, 24])
     ws4.append(["12'-9", 12.5, 21])
-
-    # 5. 例休
-    ws5 = wb.create_sheet("例休")
-    ws5.append(["ID", "日期", "至少9例", "至少9"]) 
-    ws5.append(["1800", f"{year}/{month}/15", 2, 2])
-    
-    ws5.column_dimensions['B'].width = 15
 
     wb.save(output)
     return output.getvalue()
@@ -326,26 +286,19 @@ def generate_formatted_excel(df, year, month):
     ws = wb.active
     ws.title = "Final_Schedule"
     
-    fill_big_blue = PatternFill(start_color="DCE6F1", end_color="DCE6F1", fill_type="solid") 
-    fill_big_orange = PatternFill(start_color="FDE9D9", end_color="FDE9D9", fill_type="solid") 
-    fill_small_pink = PatternFill(start_color="F2DCDB", end_color="F2DCDB", fill_type="solid") 
-    fill_small_purple = PatternFill(start_color="E4DFEC", end_color="E4DFEC", fill_type="solid") 
+    # 🎨 定義顏色樣式
+    fill_big_blue = PatternFill(start_color="DCE6F1", end_color="DCE6F1", fill_type="solid") # 淺藍
+    fill_big_orange = PatternFill(start_color="FDE9D9", end_color="FDE9D9", fill_type="solid") # 淺橘
+    fill_small_pink = PatternFill(start_color="F2DCDB", end_color="F2DCDB", fill_type="solid") # 淺粉
+    fill_small_purple = PatternFill(start_color="E4DFEC", end_color="E4DFEC", fill_type="solid") # 淺紫
     
-    target_stats = ["9例", "9", "4-12", "12'-9"] 
-    
+    weekday_map = {0: '一', 1: '二', 2: '三', 3: '四', 4: '五', 5: '六', 6: '日'}
     headers = list(df.columns)
     if 'Name' in headers: headers[headers.index('Name')] = '員工'
     
-    headers.extend([""] + target_stats)
-    
-    ws.append(headers)
-    
-    weekday_map = {0: '一', 1: '二', 2: '三', 3: '四', 4: '五', 5: '六', 6: '日'}
     weekdays = []
     for col in headers:
-        if col in target_stats or col == "":
-            weekdays.append('') 
-        elif col == 'ID': weekdays.append('')
+        if col == 'ID': weekdays.append('')
         elif col == '員工': weekdays.append('星期')
         else:
             try:
@@ -353,17 +306,12 @@ def generate_formatted_excel(df, year, month):
                 dt = datetime(year, month, d)
                 weekdays.append(weekday_map[dt.weekday()])
             except: weekdays.append('')
+    
+    ws.append(headers)
     ws.append(weekdays)
     
-    for row_data in df.values.tolist():
-        shifts = [str(x).strip() for x in row_data[2:]]
-        
-        counts = []
-        for t in target_stats:
-            counts.append(shifts.count(t))
-            
-        final_row = row_data + [""] + counts
-        ws.append(final_row)
+    for r in df.values.tolist():
+        ws.append(r)
         
     thin_border = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
     
@@ -410,19 +358,21 @@ def create_preview_df(df, year, month):
 
 # --- 3. 主程式介面 ---
 
+# ✨ 側邊欄設計
 with st.sidebar:
     st.title("⚙️ 排班設定面板")
     
+    # 1. 先讓使用者選擇年月
     c1, c2 = st.columns(2)
     with c1: 
         this_year = datetime.now().year
-        year_range = range(this_year - 1, this_year + 10)
-        y = st.selectbox("年份", year_range, index=1) 
+        y = st.selectbox("年份", [this_year, this_year+1], index=0)
     with c2: 
         m = st.selectbox("月份", range(1,13), index=3) # 預設 4月
 
     st.divider()
 
+    # 2. 範本下載按鈕
     st.write("📝 **初次使用？請先下載範本**")
     
     template_data = create_template_excel(y, m) 
@@ -434,17 +384,18 @@ with st.sidebar:
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
     
+    # 🌟 新功能：快速生成需求表
     with st.expander("🛠️ 快速生成每月需求表 (Shifts)"):
         st.caption("勾選平日/假日需要的班別，自動產生整個月的 Excel！")
         
-        # ✨ 關鍵修正：將 "8-4'" 和 "8-4'掃" 加入 all_shifts，避免 multiselect 報錯
-        all_shifts = ["8-4' F", "8-5", "12' -9", "4-12", "8-5掃", "01", "01特", "9", "9例", "8-4'", "8-4'掃"]
+        # 班別清單 (你可以自己加)
+        all_shifts = ["8-4' F", "8-5", "12' -9", "4-12", "8-5掃", "01", "01特", "9", "9例"]
         
         st.write("🗓️ **平日 (週一~週五)**:")
         wd_shifts = st.multiselect("平日班別", all_shifts, default=["8-4' F", "8-5", "12' -9", "4-12", "8-5掃", "01"])
         
         st.write("🎉 **假日 (週六、週日)**:")
-        we_shifts = st.multiselect("假日班別", all_shifts, default=["8-4' F", "4-12", "8-4'", "8-4'掃"]) 
+        we_shifts = st.multiselect("假日班別", all_shifts, default=["8-4' F", "4-12", "8-4' F"]) # 預設值可改
 
         if st.button("⚡ 生成並準備下載"):
             try:
@@ -454,6 +405,7 @@ with st.sidebar:
                     dt_gen = datetime(y, m, day_gen)
                     date_str = dt_gen.strftime("%Y/%-m/%-d")
                     
+                    # 判斷平假日 (5=週六, 6=週日)
                     if dt_gen.weekday() >= 5:
                         target_shifts = we_shifts
                     else:
@@ -464,7 +416,8 @@ with st.sidebar:
                 
                 df_gen = pd.DataFrame(data_gen, columns=["Date", "Shift", "Count"])
                 output_gen = io.BytesIO()
-                with pd.ExcelWriter(output_gen, engine='openpyxl') as writer:
+                # 使用 xlsxwriter 引擎寫入 (Streamlit 支援度好)
+                with pd.ExcelWriter(output_gen, engine='xlsxwriter') as writer:
                     df_gen.to_excel(writer, sheet_name='Shifts', index=False)
                 
                 st.download_button(
@@ -478,10 +431,12 @@ with st.sidebar:
 
     st.divider()
 
+    # 3. 上傳區
     uploaded_file = st.file_uploader("📂 請上傳 Excel 排班表 (data.xlsx)", type=['xlsx'])
     
     st.info("💡 **週期上色說明**：\n- 日期列：28天大週期 (藍/橘)\n- 星期列：14天小週期 (粉/紫)")
 
+# ✨ 主畫面設計
 st.title("📅 智慧排班系統")
 st.markdown("---")
 
@@ -532,8 +487,6 @@ if uploaded_file is not None:
                         v_days.append(t.day)
                     except: pass
             df_roster = df_roster.rename(columns=d_map)
-            df_roster = df_roster.loc[:, ~df_roster.columns.duplicated()]
-            
             v_days = sorted(list(set(v_days)))
             for d in v_days: df_roster[str(d)] = df_roster[str(d)].apply(clean_str)
         except Exception as e:
@@ -548,65 +501,14 @@ if uploaded_file is not None:
             st.error(f"❌ 讀取 Shifts 失敗: {e}")
             st.stop()
 
-        # ✨ 讀取休假限制 (忽略年份，只看月日)
-        leave_constraints = []
-        try:
-            name_to_id = {}
-            if 'Name' in df_roster.columns and 'ID' in df_roster.columns:
-                for _, r in df_roster.iterrows():
-                    n = clean_str(r['Name'])
-                    i = clean_str(r['ID'])
-                    if n and i:
-                        name_to_id[n] = i
-
-            xls_obj = pd.ExcelFile(uploaded_file)
-            target_sheet = None
-            if "例休" in xls_obj.sheet_names:
-                target_sheet = "例休"
-            elif "LeaveConstraints" in xls_obj.sheet_names:
-                target_sheet = "LeaveConstraints"
-            
-            if target_sheet:
-                df_leave = pd.read_excel(uploaded_file, sheet_name=target_sheet)
-                df_leave = smart_rename(df_leave, {
-                    'ID': ['ID', '卡號'], 
-                    'LimitDate': ['LimitDate', '指定日期', '日期'], 
-                    'MinExample': ['MinExample', 'Min9Example', '至少9例'], 
-                    'MinRest': ['MinRest', 'Min9', '至少9']
-                })
-                for _, r in df_leave.iterrows():
-                    try:
-                        raw_id = clean_str(r['ID'])
-                        l_sid = name_to_id.get(raw_id, raw_id)
-
-                        l_date = pd.to_datetime(r['LimitDate'])
-                        l_min_ex = extract_number(r.get('MinExample', 0))
-                        l_min_re = extract_number(r.get('MinRest', 0))
-
-                        if l_date.month == m:
-                            leave_constraints.append({
-                                'sid': l_sid,
-                                'date': l_date,
-                                'min_ex': l_min_ex,
-                                'min_re': l_min_re
-                            })
-                    except: pass
-        except: pass 
-
         py, pm = get_prev_month(y, m)
         sids = df_roster['ID'].tolist()
-        last_con, last_shift_map, msg = auto_calculate_last_consecutive_from_upload(uploaded_file, py, pm, sids)
+        last_con, msg = auto_calculate_last_consecutive_from_upload(uploaded_file, py, pm, sids)
         
         if "找不到" in msg: 
             st.warning(f"⚠️ {msg}")
         else: 
             st.success(f"✅ {msg}")
-        
-        if leave_constraints:
-            st.success(f"🛡️ 已讀取 {len(leave_constraints)} 條指定日期【例休】限制")
-            with st.expander("🔍 查看已讀取的例休限制 (前 5 筆)"):
-                for i, lc in enumerate(leave_constraints[:5]):
-                    st.write(f"#{i+1}: 員工 {lc['sid']} 在 {lc['date'].month}/{lc['date'].day} 前，必須剛好排 {lc['min_ex']}例 + {lc['min_re']}休")
 
         mask = (df_shifts['Date'].dt.year == y) & (df_shifts['Date'].dt.month == m)
         m_shifts = df_shifts[mask].copy()
@@ -633,6 +535,7 @@ if uploaded_file is not None:
                         if rest < 11:
                             forbidden_pairs.add((s1, s2))
                 
+                # 手動加入禁止規則
                 forbidden_pairs.add(('4-12', "12'-9"))
                 
                 if forbidden_pairs:
@@ -648,12 +551,8 @@ if uploaded_file is not None:
                 for _, r in df_roster.iterrows():
                     sid = r['ID']
                     for d in v_days:
-                        v_obj = r[str(d)]
-                        if isinstance(v_obj, pd.Series): v_obj = v_obj.iloc[0]
-                        v = str(v_obj).strip()
-                        
-                        if v not in ["", "nan", "None"]:
-                            fixed[(sid, d)] = v
+                        v = r[str(d)]
+                        if v != "": fixed[(sid, d)] = v
 
                 needed = []
                 for _, r in m_shifts.iterrows():
@@ -679,13 +578,12 @@ if uploaded_file is not None:
                         vars[(sid, d, s)] = v
                         grp.append(v)
                         if (sid, d) not in lookup: lookup[(sid, d)] = []
-                        lookup[(sid, d)].append((target_shift, v)) 
+                        lookup[(sid, d)].append(v)
                         obj.append(v * random.randint(100, 200)) 
                     if grp: model.Add(sum(grp) <= c)
 
                 model.Maximize(sum(obj))
-                for _, vs in lookup.items(): 
-                    model.Add(sum([x[1] for x in vs]) <= 1)
+                for _, vs in lookup.items(): model.Add(sum(vs) <= 1)
                 
                 w_size = 7
                 for sid in sids:
@@ -697,8 +595,7 @@ if uploaded_file is not None:
                         if fv: 
                             val = 0 if is_rest_day(fv) else 1
                         elif (sid, d) in lookup: 
-                            working_vars = [v for (s, v) in lookup[(sid, d)] if is_working_day(s)]
-                            val = sum(working_vars)
+                            val = sum(lookup[(sid, d)])
                         else: 
                             val = 0 
                         curr.append(val)
@@ -709,16 +606,6 @@ if uploaded_file is not None:
                             model.Add(sum(win) <= 6)
                 
                 for sid in sids:
-                    # 跨月銜接檢查 (上個月底 -> 本月1號)
-                    last_shift = last_shift_map.get(sid)
-                    if last_shift:
-                        for s1, s2 in forbidden_pairs:
-                            if clean_str(last_shift) == s1: 
-                                v2 = vars.get((sid, 1, s2))
-                                if v2 is not None:
-                                    model.Add(v2 == 0)
-
-                    # 本月內銜接檢查
                     for i in range(len(v_days) - 1):
                         d1 = v_days[i]
                         d2 = v_days[i+1]
@@ -734,44 +621,10 @@ if uploaded_file is not None:
                             if v1 is not None and fix2 == s2:
                                 model.Add(v1 == 0)
 
-                # ✨ 應用【例休】限制 (嚴格等於)
-                for lc in leave_constraints:
-                    sid = lc['sid']
-                    limit_d = lc['date'].day
-                    target_9li = lc['min_ex'] 
-                    target_9 = lc['min_re']   
-                    
-                    vars_9li = []
-                    vars_9 = []
-                    
-                    current_range_days = [d for d in v_days if d <= limit_d]
-                    
-                    for d in current_range_days:
-                        fv = fixed.get((sid, d), "")
-                        if fv:
-                            if str(fv) == "9例": target_9li -= 1
-                            if str(fv) == "9": target_9 -= 1
-                        
-                        elif (sid, d) in lookup:
-                             for s_name, var in lookup[(sid, d)]:
-                                 if str(s_name) == "9例":
-                                     vars_9li.append(var)
-                                 elif str(s_name) == "9":
-                                     vars_9.append(var)
-                    
-                    if target_9li < 0:
-                        st.warning(f"⚠️ 警告：員工 {sid} 的『9例』已被固定班表排超過了！")
-                    else:
-                        model.Add(sum(vars_9li) == target_9li)
-
-                    if target_9 < 0:
-                        st.warning(f"⚠️ 警告：員工 {sid} 的『9』已被固定班表排超過了！")
-                    else:
-                        model.Add(sum(vars_9) == target_9)
-
                 status = solver.Solve(model)
 
             if status in [cp_model.OPTIMAL, cp_model.FEASIBLE]:
+                # 特效已移除，保持畫面專業
                 
                 df_fin = df_roster.copy().set_index('ID')
                 for (sid, d, s), v in vars.items():
@@ -814,7 +667,7 @@ if uploaded_file is not None:
                         type="primary"
                     )
             else:
-                st.error("❌ 排班失敗：找不到可行解。建議檢查：1. 固定班是否已違反法規？ 2. 人力是否不足？ 3. 例休限制是否太嚴苛？")
+                st.error("❌ 排班失敗：找不到可行解。建議檢查：1. 固定班是否已違反法規？ 2. 人力是否不足？")
     except Exception as e:
         st.error(f"Error: {e}")
         import traceback
