@@ -15,6 +15,7 @@ except ImportError:
 try:
     import openpyxl
     from openpyxl.styles import Alignment, Border, Side, PatternFill
+    from openpyxl.utils import get_column_letter
     OPENPYXL_AVAILABLE = True
 except ImportError:
     OPENPYXL_AVAILABLE = False
@@ -263,11 +264,11 @@ def create_template_excel(year, month):
     
     ws1 = wb.active
     ws1.title = "Staff"
-    ws1.append(["ID", "Name", "Skills"])
+    ws1.append(["卡號", "員工", "Skills"])
     ws1.append(["1800", "範例員工", "8-4'F,8-5"]) 
 
     ws2 = wb.create_sheet("Roster")
-    header = ["ID", "Name"] + [str(i) for i in range(1, num_days + 1)]
+    header = ["卡號", "員工"] + [str(i) for i in range(1, num_days + 1)]
     ws2.append(header)
     ws2.append(["1800", "範例員工"] + [""] * num_days)
 
@@ -289,7 +290,7 @@ def create_template_excel(year, month):
 def generate_formatted_excel(df, year, month):
     wb = openpyxl.Workbook()
     ws = wb.active
-    ws.title = "Final_Schedule"
+    ws.title = f"{month}月"
     
     fill_big_blue = PatternFill(start_color="DCE6F1", end_color="DCE6F1", fill_type="solid")
     fill_big_orange = PatternFill(start_color="FDE9D9", end_color="FDE9D9", fill_type="solid")
@@ -297,55 +298,86 @@ def generate_formatted_excel(df, year, month):
     fill_small_purple = PatternFill(start_color="E4DFEC", end_color="E4DFEC", fill_type="solid")
     
     weekday_map = {0: '一', 1: '二', 2: '三', 3: '四', 4: '五', 5: '六', 6: '日'}
-    headers = list(df.columns)
-    if 'Name' in headers: headers[headers.index('Name')] = '員工'
+    
+    day_cols = []
+    for c in df.columns:
+        if c not in ['ID', 'Name', '員工', '卡號']:
+            try:
+                day_cols.append(int(c))
+            except: pass
+    day_cols.sort()
     
     stats_targets = ["9例", "9", "4-12", "12'-9"]
     
-    ws.append(headers + stats_targets)
+    row1 = [""] * (len(day_cols) + 2 + len(stats_targets))
+    mid_idx = len(day_cols) // 2
+    if mid_idx < 2: mid_idx = 2
+    row1[mid_idx] = year
+    row1[mid_idx+1] = "年"
+    row1[mid_idx+2] = month
+    row1[mid_idx+3] = "月"
+    ws.append(row1)
     
-    weekdays = []
-    for col in headers:
-        if col == 'ID': weekdays.append('')
-        elif col == '員工': weekdays.append('星期')
-        else:
-            try:
-                d = int(col)
-                dt = datetime(year, month, d)
-                weekdays.append(weekday_map[dt.weekday()])
-            except: weekdays.append('')
-    ws.append(weekdays + [""] * len(stats_targets))
+    ws.append([""] * len(row1))
     
-    for r in df.values.tolist():
-        stats_counts = []
+    row3 = ["", ""]
+    for d in day_cols:
+        row3.append(f"{year}-{month:02d}-{d:02d}")
+    row3.extend([""] * len(stats_targets))
+    ws.append(row3)
+    
+    row4 = ["卡號", "員工"]
+    for d in day_cols:
+        dt = datetime(year, month, d)
+        row4.append(weekday_map[dt.weekday()])
+    row4.extend(stats_targets)
+    ws.append(row4)
+    
+    for idx, r in df.iterrows():
+        id_val = r.get('ID', r.get('卡號', ''))
+        name_val = r.get('Name', r.get('員工', id_val))
+        row_data = [id_val, name_val]
+        
+        shift_data = []
+        for d in day_cols:
+            val = str(r[str(d)]).strip()
+            shift_data.append(val if val not in ['nan', 'None', ''] else "")
+        
+        row_data.extend(shift_data)
+        
         for target in stats_targets:
-            count = r.count(target)
-            stats_counts.append(count if count > 0 else "")
-        ws.append(r + stats_counts)
+            count = shift_data.count(target)
+            row_data.append(count if count > 0 else "")
+            
+        ws.append(row_data)
         
     thin_border = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
     
-    for row in ws.iter_rows():
+    for row in ws.iter_rows(min_row=3, max_row=ws.max_row, min_col=1, max_col=len(row4)):
         for cell in row:
             cell.alignment = Alignment(horizontal='center', vertical='center')
-            cell.border = thin_border
-            
-            if cell.row <= 2 and cell.column <= len(headers):
-                header_val = headers[cell.column - 1]
-                try:
-                    d = int(header_val)
-                    current_dt = datetime(year, month, d)
-                    delta_days = (current_dt - BASE_DATE).days
-                    if delta_days >= 0:
-                        if cell.row == 1:
-                            big_cycle_idx = delta_days // 28
-                            if big_cycle_idx % 2 == 0: cell.fill = fill_big_blue
-                            else: cell.fill = fill_big_orange
-                        elif cell.row == 2:
-                            small_cycle_idx = delta_days // 14
-                            if small_cycle_idx % 2 == 0: cell.fill = fill_small_pink
-                            else: cell.fill = fill_small_purple
-                except ValueError: pass
+            if cell.row >= 4 or (cell.row == 3 and 3 <= cell.column <= len(day_cols) + 2):
+                cell.border = thin_border
+                
+            if cell.row in [3, 4] and 3 <= cell.column <= len(day_cols) + 2:
+                d = day_cols[cell.column - 3]
+                current_dt = datetime(year, month, d)
+                delta_days = (current_dt - BASE_DATE).days
+                if delta_days >= 0:
+                    if cell.row == 3:
+                        big_cycle_idx = delta_days // 28
+                        if big_cycle_idx % 2 == 0: cell.fill = fill_big_blue
+                        else: cell.fill = fill_big_orange
+                    elif cell.row == 4:
+                        small_cycle_idx = delta_days // 14
+                        if small_cycle_idx % 2 == 0: cell.fill = fill_small_pink
+                        else: cell.fill = fill_small_purple
+
+    ws.column_dimensions['A'].width = 12
+    ws.column_dimensions['B'].width = 12
+    for col_idx in range(3, len(day_cols) + 3):
+        col_letter = get_column_letter(col_idx)
+        ws.column_dimensions[col_letter].width = 13
 
     output = io.BytesIO()
     wb.save(output)
@@ -353,31 +385,40 @@ def generate_formatted_excel(df, year, month):
 
 def create_preview_df(df, year, month):
     weekday_map = {0: '一', 1: '二', 2: '三', 3: '四', 4: '五', 5: '六', 6: '日'}
-    headers = list(df.columns)
+    new_cols = []
     weekdays_row = {}
-    for col in headers:
-        if col == 'ID': weekdays_row[col] = ''
-        elif col == 'Name': weekdays_row[col] = '星期'
+    for col in df.columns:
+        if col in ['ID', '卡號']: 
+            new_cols.append('卡號')
+            weekdays_row['卡號'] = ''
+        elif col in ['Name', '員工']: 
+            new_cols.append('員工')
+            weekdays_row['員工'] = '星期'
         else:
             try:
                 d = int(col)
                 dt = datetime(year, month, d)
-                weekdays_row[col] = weekday_map[dt.weekday()]
-            except: weekdays_row[col] = ''
-    return pd.concat([pd.DataFrame([weekdays_row]), df], ignore_index=True)
+                date_str = f"{year}-{month:02d}-{d:02d}"
+                new_cols.append(date_str)
+                weekdays_row[date_str] = weekday_map[dt.weekday()]
+            except:
+                new_cols.append(col)
+                weekdays_row[col] = ''
+                
+    df_preview = df.copy()
+    df_preview.columns = new_cols
+    df_preview = pd.concat([pd.DataFrame([weekdays_row]), df_preview], ignore_index=True)
+    return df_preview
 
-
-# --- [新增處 1]：處理 114活動病歷掃描分析 報表格式的生成邏輯 ---
 def generate_scan_analysis_excel(df, year, month, target_shifts):
     records = []
     for _, row in df.iterrows():
-        staff_id = row['ID']
+        staff_id = row.get('ID', row.get('卡號', ''))
         for col in df.columns:
-            if col not in ['ID', 'Name']:
+            if col not in ['ID', 'Name', '卡號', '員工']:
                 try:
                     day = int(col)
                     shift = str(row[col]).strip()
-                    # 如果該天的班別在目標條件內，抓取出來
                     if shift in target_shifts:
                         date_str = datetime(year, month, day).strftime("%Y-%m-%d")
                         records.append({
@@ -389,7 +430,6 @@ def generate_scan_analysis_excel(df, year, month, target_shifts):
                     pass
     
     df_report = pd.DataFrame(records)
-    # 按 日期 -> 班別 -> 人員 排序，版面更乾淨整齊
     if not df_report.empty:
         df_report['日期'] = pd.to_datetime(df_report['日期'])
         df_report = df_report.sort_values(by=["日期", "班別", "人員"])
@@ -400,23 +440,43 @@ def generate_scan_analysis_excel(df, year, month, target_shifts):
     ws = wb.active
     ws.title = "範例"
     
-    # 寫入表頭 (A~F 欄位，還原格式)
     headers = ["日期", "班別", "人員", "總病歷本數（本）", "總掃描頁數（頁）", "備註"]
     for col_idx, header in enumerate(headers, 1):
         ws.cell(row=1, column=col_idx, value=header)
         
-    # 將資料依序寫入工作表
     if not df_report.empty:
         for row_idx, record in enumerate(df_report.to_dict('records'), 2):
             ws.cell(row=row_idx, column=1, value=record["日期"])
             ws.cell(row=row_idx, column=2, value=record["班別"])
             ws.cell(row=row_idx, column=3, value=record["人員"])
     
-    # 寫入 L 欄 (第 12 欄) 的篩選目標班別，以對應範例檔案格式
     ws.cell(row=1, column=12, value="班別")
     for i, ts in enumerate(target_shifts, 2):
         ws.cell(row=i, column=12, value=ts)
         
+    thin_border = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
+    center_alignment = Alignment(horizontal='center', vertical='center')
+    
+    ws.column_dimensions['A'].width = 15
+    ws.column_dimensions['B'].width = 12
+    ws.column_dimensions['C'].width = 12
+    ws.column_dimensions['D'].width = 22
+    ws.column_dimensions['E'].width = 22
+    ws.column_dimensions['F'].width = 15
+    ws.column_dimensions['L'].width = 15
+    
+    for row in ws.iter_rows(min_row=1, max_row=ws.max_row, min_col=1, max_col=6):
+        for cell in row:
+            if cell.value is not None:
+                cell.border = thin_border
+                cell.alignment = center_alignment
+                
+    for row in ws.iter_rows(min_row=1, max_row=ws.max_row, min_col=12, max_col=12):
+        for cell in row:
+            if cell.value is not None:
+                cell.border = thin_border
+                cell.alignment = center_alignment
+                
     wb.save(output)
     return output.getvalue()
 
@@ -519,7 +579,7 @@ if uploaded_file is not None:
             df_tmp = pd.read_excel(uploaded_file, sheet_name='Roster', header=None, nrows=15)
             h_idx = -1
             for i, r in df_tmp.iterrows():
-                if any("卡號" in str(v) for v in r.values): h_idx = i; break
+                if any("卡號" in str(v) or "ID" in str(v) for v in r.values): h_idx = i; break
             if h_idx == -1: h_idx = 0
             df_roster = pd.read_excel(uploaded_file, sheet_name='Roster', header=h_idx)
             df_roster = smart_rename(df_roster, {'ID':['ID','卡號'], 'Name':['Name','姓名','員工']})
@@ -701,7 +761,6 @@ if uploaded_file is not None:
                 kpi2.metric("📅 排班總天數", f"{len(v_days)} 天")
                 kpi3.metric("🛡️ 違規檢查", "0 錯誤", delta="Passed")
 
-                # --- [新增處 2]：加入第三個 Tab 供「活動病歷掃描分析」下載 ---
                 tab1, tab2, tab3 = st.tabs(["📊 排班結果預覽", "📥 下載 Excel", "📝 下載活動病歷掃描分析"])
                 with tab1:
                     df_preview = create_preview_df(df_export, y, m)
@@ -714,10 +773,7 @@ if uploaded_file is not None:
                     st.write("📥 **產出符合【114活動病歷掃描分析】格式的報表**")
                     st.info("系統會自動抓取您選擇的班別，並產出對應的「日期、班別、人員」清單。右側 (L欄) 也會自動附上對應的篩選條件格式。")
                     
-                    # 預設欲篩選的目標班別 (對應您提供範例 L 欄的資料)
                     default_scan_shifts = ["8-4'掃", "8-4'", "8-5", "12'-9", "8-5掃"]
-                    
-                    # 避免在全域找不到 all_shifts 變數，整合全部班別清單
                     all_possible_shifts = list(set(["8-4'F", "8-5", "12'-9", "4-12", "8-4'掃", "8-4'銷", "8-4'", "8-5銷", "8-5掃", "01", "01特", "9", "9例"] + default_scan_shifts))
                     
                     selected_scan_shifts = st.multiselect(
@@ -726,7 +782,6 @@ if uploaded_file is not None:
                         default=[s for s in default_scan_shifts if s in all_possible_shifts]
                     )
                     
-                    # 這裡直接生成資料放在 Download Button，避免額外的按鈕造成 Streamlit 頁面刷新問題
                     scan_excel_data = generate_scan_analysis_excel(df_export, y, m, selected_scan_shifts)
                     fn_scan = f"114活動病歷掃描分析_{y}_{m}.xlsx"
                     st.download_button(
