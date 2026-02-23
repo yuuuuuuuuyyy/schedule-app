@@ -195,6 +195,7 @@ def get_prev_month(year, month):
     if month == 1: return year - 1, 12
     return year, month - 1
 
+# --- [修改處 1]：讀取上月資料時，多抓取「最後一天的班別」 ---
 def auto_calculate_last_consecutive_from_upload(uploaded_file, prev_year, prev_month, current_staff_ids):
     if uploaded_file is None: return {}, {}, "無上傳檔案"
     try:
@@ -230,7 +231,7 @@ def auto_calculate_last_consecutive_from_upload(uploaded_file, prev_year, prev_m
         day_cols.sort(key=lambda x: int(float(str(x))))
         
         con_res = {}
-        last_shift_res = {}
+        last_shift_res = {} # 用來存每個員工上個月最後一天的班別
         
         for sid in current_staff_ids:
             row = df_prev[df_prev[id_col] == sid]
@@ -239,12 +240,14 @@ def auto_calculate_last_consecutive_from_upload(uploaded_file, prev_year, prev_m
                 last_shift_res[sid] = ""
                 continue
             
+            # 計算連續上班
             con = 0
             for c in reversed(day_cols):
                 if is_working_day(str(row.iloc[0][c])): con += 1
                 else: break
             con_res[sid] = con
             
+            # 抓取最後一天的班別
             if day_cols:
                 last_day_col = day_cols[-1]
                 last_shift_res[sid] = clean_str(row.iloc[0][last_day_col])
@@ -366,74 +369,10 @@ def create_preview_df(df, year, month):
             except: weekdays_row[col] = ''
     return pd.concat([pd.DataFrame([weekdays_row]), df], ignore_index=True)
 
-# --- [新增函式] 產出活動病歷掃描分析格式 ---
-def generate_activity_analysis_excel(df, year, month, target_shifts):
-    records = []
-    days = [col for col in df.columns if str(col).isdigit()]
-    
-    # 遍歷每日與每位員工，將符合篩選條件的班別挑選出來
-    for d in days:
-        date_str = f"{year}-{month:02d}-{int(d):02d}"
-        for _, row in df.iterrows():
-            shift = clean_str(row[str(d)])
-            if shift in target_shifts:
-                records.append({
-                    '日期': date_str,
-                    '班別': shift,
-                    '人員': clean_str(row['ID'])
-                })
-    
-    res_df = pd.DataFrame(records)
-    if res_df.empty:
-        res_df = pd.DataFrame(columns=['日期', '班別', '人員'])
-    
-    # 新增範例檔案要求的空白欄位
-    res_df['總病歷本數（本）'] = ""
-    res_df['總掃描頁數（頁）'] = ""
-    res_df['備註'] = ""
-    
-    # 按照日期與班別進行排序確保整齊
-    if not res_df.empty:
-        res_df = res_df.sort_values(by=['日期', '班別']).reset_index(drop=True)
-        
-    # 建立 G~K 欄的空白欄位 (共 5 欄)
-    for i in range(6, 11):
-        res_df[f'空白_{i}'] = ""
-        
-    # L 欄要顯示篩選出的班別清單，名稱為 '班別'
-    res_df['篩選班別參考'] = ""
-    
-    for i, s in enumerate(target_shifts):
-        if i < len(res_df):
-            res_df.at[i, '篩選班別參考'] = s
-        else:
-            # 如果篩選名單比資料列數長，自動補上空白行
-            new_row = {c: "" for c in res_df.columns}
-            new_row['篩選班別參考'] = s
-            res_df.loc[i] = new_row
-            
-    # 重新命名欄位名稱以完全符合範例 (加上半形空白避免與 B 欄衝突)
-    rename_map = {f'空白_{i}': '' for i in range(6, 11)}
-    rename_map['篩選班別參考'] = '班別 ' 
-    res_df = res_df.rename(columns=rename_map)
-
-    output = io.BytesIO()
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        res_df.to_excel(writer, index=False, sheet_name='範例')
-    return output.getvalue()
-
-
 # --- 3. 主程式介面 ---
 
 with st.sidebar:
     st.title("⚙️ 排班設定面板")
-    
-    # [調整] 將完整的班別清單提早定義，供多個區塊共用
-    all_shifts = [
-        "8-4'F", "8-5", "12'-9", "4-12", "8-4'掃", 
-        "8-4'銷", "8-4'", "8-5銷", "8-5掃", 
-        "01", "01特", "9", "9例"
-    ]
     
     c1, c2 = st.columns(2)
     with c1: 
@@ -444,16 +383,6 @@ with st.sidebar:
         y = st.selectbox("年份", year_options, index=default_year_idx)
     with c2: 
         m = st.selectbox("月份", range(1, 13), index=now.month - 1)
-
-    st.divider()
-    
-    # [新增區塊] 活動病歷掃描分析的選項
-    st.write("📊 **活動病歷分析表設定**")
-    analysis_target_shifts = st.multiselect(
-        "欲篩選並匯出的班別 (如 L 欄位)", 
-        options=all_shifts, 
-        default=["8-5掃", "8-4'掃", "8-4'", "8-5", "12'-9"]
-    )
 
     st.divider()
 
@@ -468,15 +397,25 @@ with st.sidebar:
     
     with st.expander("🛠️ 快速生成每月需求表 (Shifts)"):
         st.caption("勾選平日/假日需要的班別，自動產生整個月的 Excel！")
+        # 定義完整的班別清單 (確保無重複、無多餘空格)
+        all_shifts = [
+            "8-4'F", "8-5", "12'-9", "4-12", "8-4'掃", 
+            "8-4'銷", "8-4'", "8-5銷", "8-5掃", 
+            "01", "01特", "9", "9例"
+        ]
         
         st.write("🗓️ **平日 (週一~週五)**:")
+        # 確保 default 中的每個項目都存在於 all_shifts 中
         wd_default = ["8-4'F", "8-5", "12'-9", "4-12", "8-5掃", "01"]
+        # 過濾掉不在 all_shifts 中的預設值 (防呆)
         wd_default = [x for x in wd_default if x in all_shifts]
         
         wd_shifts = st.multiselect("平日班別", all_shifts, default=wd_default)
 
         st.write("🎉 **假日 (週六、週日)**:")
+        # 確保 default 中的每個項目都存在於 all_shifts 中
         we_default = ["8-4'F", "8-4'", "4-12", "8-4'掃"]
+        # 過濾掉不在 all_shifts 中的預設值 (防呆)
         we_default = [x for x in we_default if x in all_shifts]
         
         we_shifts = st.multiselect("假日班別", all_shifts, default=we_default)
@@ -575,6 +514,7 @@ if uploaded_file is not None:
 
         py, pm = get_prev_month(y, m)
         sids = df_roster['ID'].tolist()
+        # [修改處 2]：接收回傳的 last_shifts
         last_con, last_shifts, msg = auto_calculate_last_consecutive_from_upload(uploaded_file, py, pm, sids)
         
         if "找不到" in msg: st.warning(f"⚠️ {msg}")
@@ -668,6 +608,7 @@ if uploaded_file is not None:
                             win = full[i:i+w_size]
                             model.Add(sum(win) <= 6)
                 
+                # 平日排班衝突檢查
                 for sid in sids:
                     for i in range(len(v_days) - 1):
                         d1 = v_days[i]
@@ -680,16 +621,22 @@ if uploaded_file is not None:
                             if fix1 == s1 and v2 is not None: model.Add(v2 == 0)
                             if v1 is not None and fix2 == s2: model.Add(v1 == 0)
 
+                # --- [修改處 3]：新增「上個月底」銜接「這個月初」的檢查 ---
                 if v_days:
                     first_day = v_days[0]
                     for sid in sids:
                         last_s = last_shifts.get(sid, "")
                         if last_s:
+                            # 檢查所有可能的本月第一天班別
+                            # 如果 (上月最後一天, 本月第一天) 違反休息時間規則，則禁止該排班
                             for (t_sid, t_d, t_s), v in vars.items():
                                 if t_sid == sid and t_d == first_day:
                                     if (last_s, t_s) in forbidden_pairs:
                                         model.Add(v == 0)
                             
+                            # 如果第一天是固定班表(Fixed)，也要檢查是否違規 (雖然無法改變，但可以 Log 或讓解無效)
+                            # 這裡僅針對 AI 可排的變數做限制
+
                 status = solver.Solve(model)
 
             if status in [cp_model.OPTIMAL, cp_model.FEASIBLE]:
@@ -715,8 +662,7 @@ if uploaded_file is not None:
                 kpi2.metric("📅 排班總天數", f"{len(v_days)} 天")
                 kpi3.metric("🛡️ 違規檢查", "0 錯誤", delta="Passed")
 
-                # [新增] 第三個下載活動分析表的頁籤
-                tab1, tab2, tab3 = st.tabs(["📊 排班結果預覽", "📥 下載 Excel", "📥 下載活動分析表"])
+                tab1, tab2 = st.tabs(["📊 排班結果預覽", "📥 下載 Excel"])
                 with tab1:
                     df_preview = create_preview_df(df_export, y, m)
                     st.dataframe(df_preview, use_container_width=True)
@@ -724,22 +670,6 @@ if uploaded_file is not None:
                     xlsx_data = generate_formatted_excel(df_export, y, m)
                     fn = f"schedule_{y}_{m}_final.xlsx"
                     st.download_button(label=f"📥 下載排班結果 ({fn})", data=xlsx_data, file_name=fn, mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", type="primary")
-                with tab3:
-                    st.success("✅ 活動分析表已轉換完成！")
-                    st.info(f"篩選條件參考左側側邊欄，目前擷取的班別包含：\n{', '.join(analysis_target_shifts) if analysis_target_shifts else '無'}")
-                    
-                    if analysis_target_shifts:
-                        analysis_data = generate_activity_analysis_excel(df_export, y, m, analysis_target_shifts)
-                        fn_analysis = f"114活動病歷掃描分析_{y}_{m}.xlsx"
-                        st.download_button(
-                            label=f"📥 下載活動病歷掃描分析表", 
-                            data=analysis_data, 
-                            file_name=fn_analysis, 
-                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", 
-                            type="primary"
-                        )
-                    else:
-                        st.warning("請先在左方側邊欄設定欲篩選的班別後再重新產生。")
             else:
                 st.error("❌ 排班失敗：找不到可行解。")
     except Exception as e:
