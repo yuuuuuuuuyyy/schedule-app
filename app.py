@@ -45,9 +45,7 @@ if not ORTOOLS_AVAILABLE:
 BASE_DATE = datetime(2025, 12, 21)
 
 # 🌟 [在此修改您想在 Excel 右側統計的班別] 🌟
-# 請對照您的「第2張圖」，把要統計的班別寫在這裡，順序會直接反映在 Excel 上
 STATS_TARGETS = ["9例", "9", "8-4'F", "8-5", "12'-9", "4-12", "8-5掃", "8-4'掃", "01"]
-
 
 def clean_str(s):
     if isinstance(s, pd.Series): 
@@ -123,7 +121,10 @@ def check_consecutive_safe(timeline, index_to_change):
             current_con = 0
     return max_con <= 6
 
-def apply_strict_labor_rules(df_result, year, month, staff_last_month_consecutive={}):
+# [修正處 1：傳入 skills_map 排除不排班人員]
+def apply_strict_labor_rules(df_result, year, month, staff_last_month_consecutive={}, skills_map=None):
+    if skills_map is None: skills_map = {}
+    
     date_cols = []
     col_map = {} 
     for col in df_result.columns:
@@ -142,6 +143,12 @@ def apply_strict_labor_rules(df_result, year, month, staff_last_month_consecutiv
 
     for idx, row in df_result.iterrows():
         sid = row['ID']
+        
+        # 🛡️ 終極防護：如果是不排班的人，直接跳過所有的勞基法強制補班邏輯
+        user_skills = skills_map.get(sid, set())
+        if "不排班" in user_skills:
+            continue
+            
         week_ids = sorted(list(set([get_week_id(dt) for dt in date_cols])))
         for wid in week_ids:
             days_in_week = [dt for dt in date_cols if get_week_id(dt) == wid]
@@ -311,7 +318,6 @@ def generate_formatted_excel(df, year, month):
             except: pass
     day_cols.sort()
     
-    # [第 1 列] 年月標題 (向右延伸包含統計欄位)
     row1 = [""] * (len(day_cols) + 2 + len(STATS_TARGETS))
     mid_idx = len(day_cols) // 2
     if mid_idx < 2: mid_idx = 2
@@ -321,17 +327,14 @@ def generate_formatted_excel(df, year, month):
     row1[mid_idx+2] = "月"
     ws.append(row1)
     
-    # [第 2 列] 空白列
     ws.append([""] * (len(day_cols) + 2 + len(STATS_TARGETS)))
     
-    # [第 3 列] 日期 (只顯示純數字) + 右側統計佔位
     row3 = ["", ""]
     for d in day_cols:
         row3.append(str(d))
     row3.extend([""] * len(STATS_TARGETS))
     ws.append(row3)
     
-    # [第 4 列] 標題 (卡號, 員工, 星期) + 統計標題
     row4 = ["卡號", "員工"]
     for d in day_cols:
         dt = datetime(year, month, d)
@@ -339,7 +342,6 @@ def generate_formatted_excel(df, year, month):
     row4.extend(STATS_TARGETS)
     ws.append(row4)
     
-    # [第 5 列開始] 寫入資料與統計
     for idx, r in df.iterrows():
         id_val = r.get('ID', r.get('卡號', ''))
         name_val = r.get('Name', r.get('員工', id_val))
@@ -352,7 +354,6 @@ def generate_formatted_excel(df, year, month):
             row_data.append(shift_val)
             shift_data.append(shift_val)
             
-        # 統計右側的班別次數
         for target in STATS_TARGETS:
             count = shift_data.count(target)
             row_data.append(count if count > 0 else "")
@@ -361,17 +362,13 @@ def generate_formatted_excel(df, year, month):
         
     thin_border = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
     
-    # 畫框線與塗色
     total_cols = len(day_cols) + 2 + len(STATS_TARGETS)
     for row in ws.iter_rows(min_row=3, max_row=ws.max_row, min_col=1, max_col=total_cols):
         for cell in row:
             cell.alignment = Alignment(horizontal='center', vertical='center')
-            
-            # 框線範圍控制
             if cell.row >= 4 or (cell.row == 3 and 3 <= cell.column <= len(day_cols) + 2):
                 cell.border = thin_border
                 
-            # 週期上色 (只限於日期區塊)
             if cell.row in [3, 4] and 3 <= cell.column <= len(day_cols) + 2:
                 d = day_cols[cell.column - 3]
                 current_dt = datetime(year, month, d)
@@ -386,14 +383,12 @@ def generate_formatted_excel(df, year, month):
                         if small_cycle_idx % 2 == 0: cell.fill = fill_small_pink
                         else: cell.fill = fill_small_purple
 
-    # 調整欄寬，日期只要數字所以縮小，節省畫面空間
     ws.column_dimensions['A'].width = 10
     ws.column_dimensions['B'].width = 12
     for col_idx in range(3, len(day_cols) + 3):
         col_letter = get_column_letter(col_idx)
         ws.column_dimensions[col_letter].width = 8
         
-    # 統計區塊欄寬
     for col_idx in range(len(day_cols) + 3, total_cols + 1):
         col_letter = get_column_letter(col_idx)
         ws.column_dimensions[col_letter].width = 6
@@ -419,7 +414,7 @@ def create_preview_df(df, year, month):
             try:
                 d = int(col)
                 dt = datetime(year, month, d)
-                date_str = str(d)  # 網頁預覽也改成只顯示單純數字
+                date_str = str(d) 
                 new_cols.append(date_str)
                 weekdays_row[date_str] = weekday_map[dt.weekday()]
                 day_cols.append(str(d))
@@ -430,7 +425,6 @@ def create_preview_df(df, year, month):
     df_preview = df.copy()
     df_preview.columns = new_cols
     
-    # 網頁預覽同步加上統計結果
     for target in STATS_TARGETS:
         df_preview[target] = df_preview.apply(lambda row: sum(str(row.get(d, '')).strip() == target for d in day_cols) or "", axis=1)
         weekdays_row[target] = ""
@@ -588,8 +582,9 @@ st.markdown("---")
 
 if uploaded_file is not None:
     try:
+        # [修正處 2：強制使用 dtype=str 確保「01805」不失真]
         try:
-            df_staff = pd.read_excel(uploaded_file, sheet_name='Staff')
+            df_staff = pd.read_excel(uploaded_file, sheet_name='Staff', dtype=str)
             staff_cols = {'ID': ['ID', '卡號'], 'Skills': ['Skills', '技能']}
             df_staff = smart_rename(df_staff, staff_cols)
             skills_map = {}
@@ -603,9 +598,8 @@ if uploaded_file is not None:
             skills_map = {}
             st.warning("⚠️ 讀取 Staff 失敗，將無法執行技能限制。")
 
-        # --- 修正 Roster 讀取邏輯 ---
         try:
-            df_raw = pd.read_excel(uploaded_file, sheet_name='Roster', header=None)
+            df_raw = pd.read_excel(uploaded_file, sheet_name='Roster', header=None, dtype=str)
             h_idx = -1
             for i, r in df_raw.head(15).iterrows():
                 if any(isinstance(v, str) and ("卡號" in v or "ID" in v) for v in r.values):
@@ -672,7 +666,6 @@ if uploaded_file is not None:
         except Exception as e:
             st.error(f"❌ 讀取 Roster 失敗: {e}")
             st.stop()
-        # -----------------------------------------------
 
         try:
             df_shifts = pd.read_excel(uploaded_file, sheet_name='Shifts')
@@ -815,7 +808,9 @@ if uploaded_file is not None:
                         val = str(r[str(d)]).strip()
                         if val in ['','nan','None','0']: df_fin.at[idx, str(d)] = fill
 
-                df_fin, _ = apply_strict_labor_rules(df_fin, y, m, last_con)
+                # [修正處 3：把 skills_map 帶入，讓勞基法機制直接跳過不排班的人]
+                df_fin, _ = apply_strict_labor_rules(df_fin, y, m, last_con, skills_map)
+                
                 cols = ['ID', 'Name'] + [str(d) for d in v_days]
                 df_export = df_fin[cols].copy()
                 
