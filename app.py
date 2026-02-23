@@ -44,6 +44,11 @@ if not ORTOOLS_AVAILABLE:
 # 基準日：2025/12/21 (用於週期上色)
 BASE_DATE = datetime(2025, 12, 21)
 
+# 🌟 [在此修改您想在 Excel 右側統計的班別] 🌟
+# 請對照您的「第2張圖」，把要統計的班別寫在這裡，順序會直接反映在 Excel 上
+STATS_TARGETS = ["9例", "9", "8-4'F", "8-5", "12'-9", "4-12", "8-5掃", "8-4'掃", "01"]
+
+
 def clean_str(s):
     if isinstance(s, pd.Series): 
         if s.empty: return ""
@@ -306,8 +311,8 @@ def generate_formatted_excel(df, year, month):
             except: pass
     day_cols.sort()
     
-    # [第 1 列] 年月標題
-    row1 = [""] * (len(day_cols) + 2)
+    # [第 1 列] 年月標題 (向右延伸包含統計欄位)
+    row1 = [""] * (len(day_cols) + 2 + len(STATS_TARGETS))
     mid_idx = len(day_cols) // 2
     if mid_idx < 2: mid_idx = 2
     row1[mid_idx-1] = year
@@ -317,42 +322,57 @@ def generate_formatted_excel(df, year, month):
     ws.append(row1)
     
     # [第 2 列] 空白列
-    ws.append([""] * (len(day_cols) + 2))
+    ws.append([""] * (len(day_cols) + 2 + len(STATS_TARGETS)))
     
-    # [第 3 列] 完整日期
+    # [第 3 列] 日期 (只顯示純數字) + 右側統計佔位
     row3 = ["", ""]
     for d in day_cols:
-        row3.append(f"{year}-{month:02d}-{d:02d}")
+        row3.append(str(d))
+    row3.extend([""] * len(STATS_TARGETS))
     ws.append(row3)
     
-    # [第 4 列] 標題 (卡號, 員工, 星期)
+    # [第 4 列] 標題 (卡號, 員工, 星期) + 統計標題
     row4 = ["卡號", "員工"]
     for d in day_cols:
         dt = datetime(year, month, d)
         row4.append(weekday_map[dt.weekday()])
+    row4.extend(STATS_TARGETS)
     ws.append(row4)
     
-    # [第 5 列開始] 寫入資料
+    # [第 5 列開始] 寫入資料與統計
     for idx, r in df.iterrows():
         id_val = r.get('ID', r.get('卡號', ''))
         name_val = r.get('Name', r.get('員工', id_val))
         row_data = [id_val, name_val]
         
+        shift_data = []
         for d in day_cols:
             val = str(r.get(str(d), "")).strip()
-            row_data.append(val if val not in ['nan', 'None', ''] else "")
+            shift_val = val if val not in ['nan', 'None', ''] else ""
+            row_data.append(shift_val)
+            shift_data.append(shift_val)
+            
+        # 統計右側的班別次數
+        for target in STATS_TARGETS:
+            count = shift_data.count(target)
+            row_data.append(count if count > 0 else "")
             
         ws.append(row_data)
         
     thin_border = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
     
-    for row in ws.iter_rows(min_row=3, max_row=ws.max_row, min_col=1, max_col=len(day_cols) + 2):
+    # 畫框線與塗色
+    total_cols = len(day_cols) + 2 + len(STATS_TARGETS)
+    for row in ws.iter_rows(min_row=3, max_row=ws.max_row, min_col=1, max_col=total_cols):
         for cell in row:
             cell.alignment = Alignment(horizontal='center', vertical='center')
-            if cell.row >= 4 or (cell.row == 3 and cell.column >= 3):
+            
+            # 框線範圍控制
+            if cell.row >= 4 or (cell.row == 3 and 3 <= cell.column <= len(day_cols) + 2):
                 cell.border = thin_border
                 
-            if cell.row in [3, 4] and cell.column >= 3:
+            # 週期上色 (只限於日期區塊)
+            if cell.row in [3, 4] and 3 <= cell.column <= len(day_cols) + 2:
                 d = day_cols[cell.column - 3]
                 current_dt = datetime(year, month, d)
                 delta_days = (current_dt - BASE_DATE).days
@@ -366,11 +386,17 @@ def generate_formatted_excel(df, year, month):
                         if small_cycle_idx % 2 == 0: cell.fill = fill_small_pink
                         else: cell.fill = fill_small_purple
 
+    # 調整欄寬，日期只要數字所以縮小，節省畫面空間
     ws.column_dimensions['A'].width = 10
     ws.column_dimensions['B'].width = 12
     for col_idx in range(3, len(day_cols) + 3):
         col_letter = get_column_letter(col_idx)
-        ws.column_dimensions[col_letter].width = 13
+        ws.column_dimensions[col_letter].width = 8
+        
+    # 統計區塊欄寬
+    for col_idx in range(len(day_cols) + 3, total_cols + 1):
+        col_letter = get_column_letter(col_idx)
+        ws.column_dimensions[col_letter].width = 6
 
     output = io.BytesIO()
     wb.save(output)
@@ -380,6 +406,8 @@ def create_preview_df(df, year, month):
     weekday_map = {0: '一', 1: '二', 2: '三', 3: '四', 4: '五', 5: '六', 6: '日'}
     new_cols = []
     weekdays_row = {}
+    day_cols = []
+    
     for col in df.columns:
         if col in ['ID', '卡號']: 
             new_cols.append('卡號')
@@ -391,15 +419,22 @@ def create_preview_df(df, year, month):
             try:
                 d = int(col)
                 dt = datetime(year, month, d)
-                date_str = f"{year}-{month:02d}-{d:02d}"
+                date_str = str(d)  # 網頁預覽也改成只顯示單純數字
                 new_cols.append(date_str)
                 weekdays_row[date_str] = weekday_map[dt.weekday()]
+                day_cols.append(str(d))
             except:
                 new_cols.append(col)
                 weekdays_row[col] = ''
                 
     df_preview = df.copy()
     df_preview.columns = new_cols
+    
+    # 網頁預覽同步加上統計結果
+    for target in STATS_TARGETS:
+        df_preview[target] = df_preview.apply(lambda row: sum(str(row.get(d, '')).strip() == target for d in day_cols) or "", axis=1)
+        weekdays_row[target] = ""
+        
     df_preview = pd.concat([pd.DataFrame([weekdays_row]), df_preview], ignore_index=True)
     return df_preview
 
@@ -568,11 +603,10 @@ if uploaded_file is not None:
             skills_map = {}
             st.warning("⚠️ 讀取 Staff 失敗，將無法執行技能限制。")
 
-        # --- 修正 Roster 讀取邏輯 (精準抓取日期與資料) ---
+        # --- 修正 Roster 讀取邏輯 ---
         try:
             df_raw = pd.read_excel(uploaded_file, sheet_name='Roster', header=None)
             h_idx = -1
-            # 尋找含有「卡號」的那一列
             for i, r in df_raw.head(15).iterrows():
                 if any(isinstance(v, str) and ("卡號" in v or "ID" in v) for v in r.values):
                     h_idx = i
@@ -582,14 +616,12 @@ if uploaded_file is not None:
                 st.error("❌ Roster 工作表找不到 '卡號' 欄位。")
                 st.stop()
                 
-            # 日期列通常在標題列的上一列
             date_row = df_raw.iloc[h_idx - 1] if h_idx > 0 else df_raw.iloc[h_idx]
             header_row = df_raw.iloc[h_idx]
             
             new_cols = []
             v_days = []
             
-            # 遍歷欄位，找出日期
             for col_idx in range(len(df_raw.columns)):
                 h_val = str(header_row.iloc[col_idx]).strip()
                 date_val = date_row.iloc[col_idx]
@@ -619,7 +651,6 @@ if uploaded_file is not None:
                     else:
                         new_cols.append(f"DROP_{col_idx}")
                         
-            # 擷取純資料範圍
             df_roster = df_raw.iloc[h_idx + 1:].copy()
             df_roster.columns = new_cols
             
@@ -635,7 +666,7 @@ if uploaded_file is not None:
                     
             v_days = sorted(v_days)
             if not v_days:
-                st.error("❌ Roster 工作表無法識別日期，請確認 '卡號' 的上一列是否有標註完整日期 (如 2026-03-01)。")
+                st.error("❌ Roster 工作表無法識別日期，請確認 '卡號' 的上一列是否有標註完整日期。")
                 st.stop()
                 
         except Exception as e:
