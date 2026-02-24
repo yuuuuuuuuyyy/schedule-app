@@ -602,7 +602,7 @@ with st.sidebar:
     st.write("📌 **功能導覽**")
     tool_choice = st.radio(
         "請選擇您要執行的工具：",
-        ["📝 下載排班範本", "🛠️ 快速生成每月需求表", "📥 產出活動病歷掃描分析"]
+        ["📝 下載排班範本", "🛠️ 快速生成每月班別(排班用)", "📥 產出活動病歷掃描分析"]
     )
     
     st.divider()
@@ -618,8 +618,8 @@ with st.sidebar:
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
         
-    elif tool_choice == "🛠️ 快速生成每月需求表":
-        st.write("🛠️ **快速生成每月需求表 (Shifts)**")
+    elif tool_choice == "🛠️ 快速生成每月班別(排班用)":
+        st.write("🛠️ **快速生成每月班別 (排班用)**")
         st.caption("勾選平日/假日需要的班別，自動產生整個月的 Excel！")
         all_shifts = [
             "8-4'F", "8-5", "12'-9", "4-12", "8-4'掃", 
