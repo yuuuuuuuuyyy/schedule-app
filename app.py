@@ -14,7 +14,7 @@ except ImportError:
 
 try:
     import openpyxl
-    from openpyxl.styles import Alignment, Border, Side, PatternFill
+    from openpyxl.styles import Alignment, Border, Side, PatternFill, Font
     from openpyxl.utils import get_column_letter
     OPENPYXL_AVAILABLE = True
 except ImportError:
@@ -316,10 +316,8 @@ def generate_formatted_excel(df, year, month):
             except: pass
     day_cols.sort()
     
-    # 總寬度 = 2(卡號/員工) + len(day_cols)(日期) + 1(空白間隔欄) + len(STATS_TARGETS)(統計)
     total_cols = len(day_cols) + 2 + 1 + len(STATS_TARGETS)
     
-    # [第 1 列] 年月標題
     row1 = [""] * total_cols
     mid_idx = len(day_cols) // 2
     if mid_idx < 2: mid_idx = 2
@@ -329,27 +327,23 @@ def generate_formatted_excel(df, year, month):
     row1[mid_idx+2] = "月"
     ws.append(row1)
     
-    # [第 2 列] 空白列
     ws.append([""] * total_cols)
     
-    # [第 3 列] 日期 + 空白間隔 + 統計佔位
     row3 = ["", ""]
     for d in day_cols:
         row3.append(str(d))
-    row3.append("") # 加入空白間隔欄
+    row3.append("") 
     row3.extend([""] * len(STATS_TARGETS))
     ws.append(row3)
     
-    # [第 4 列] 標題 + 空白間隔 + 統計標題
     row4 = ["卡號", "員工"]
     for d in day_cols:
         dt = datetime(year, month, d)
         row4.append(weekday_map[dt.weekday()])
-    row4.append("") # 加入空白間隔欄
+    row4.append("") 
     row4.extend(STATS_TARGETS)
     ws.append(row4)
     
-    # [第 5 列開始] 寫入資料與統計
     for idx, r in df.iterrows():
         id_val = r.get('ID', r.get('卡號', ''))
         name_val = r.get('Name', r.get('員工', id_val))
@@ -362,7 +356,7 @@ def generate_formatted_excel(df, year, month):
             row_data.append(shift_val)
             shift_data.append(shift_val)
             
-        row_data.append("") # 加入空白間隔欄資料
+        row_data.append("") 
         
         for target in STATS_TARGETS:
             count = shift_data.count(target)
@@ -372,22 +366,18 @@ def generate_formatted_excel(df, year, month):
         
     thin_border = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
     
-    # 空白間隔欄的索引位置 (從 1 開始算)
     spacer_col_idx = len(day_cols) + 3
     
     for row in ws.iter_rows(min_row=3, max_row=ws.max_row, min_col=1, max_col=total_cols):
         for cell in row:
             cell.alignment = Alignment(horizontal='center', vertical='center')
             
-            # 如果是空白間隔欄，跳過不畫框線也不塗色
             if cell.column == spacer_col_idx:
                 continue
                 
-            # 畫框線 (不含間隔欄)
             if cell.row >= 4 or (cell.row == 3 and 3 <= cell.column <= len(day_cols) + 2):
                 cell.border = thin_border
                 
-            # 塗色 (只限日期區塊)
             if cell.row in [3, 4] and 3 <= cell.column <= len(day_cols) + 2:
                 d = day_cols[cell.column - 3]
                 current_dt = datetime(year, month, d)
@@ -402,16 +392,12 @@ def generate_formatted_excel(df, year, month):
                         if small_cycle_idx % 2 == 0: cell.fill = fill_small_pink
                         else: cell.fill = fill_small_purple
 
-    # --- 調整欄寬 ---
     ws.column_dimensions['A'].width = 10
     ws.column_dimensions['B'].width = 12
-    # 日期區塊
     for col_idx in range(3, len(day_cols) + 3):
         col_letter = get_column_letter(col_idx)
         ws.column_dimensions[col_letter].width = 8
-    # 空白間隔欄 (設定較窄，營造分隔感)
     ws.column_dimensions[get_column_letter(spacer_col_idx)].width = 3
-    # 統計區塊
     for col_idx in range(spacer_col_idx + 1, total_cols + 1):
         col_letter = get_column_letter(col_idx)
         ws.column_dimensions[col_letter].width = 6
@@ -448,12 +434,10 @@ def create_preview_df(df, year, month):
     df_preview = df.copy()
     df_preview.columns = new_cols
     
-    # 建立網頁預覽用的空白間隔欄
     spacer_name = " "
     df_preview[spacer_name] = ""
     weekdays_row[spacer_name] = ""
     
-    # 計算右側統計
     for target in STATS_TARGETS:
         df_preview[target] = df_preview.apply(lambda row: sum(str(row.get(d, '')).strip() == target for d in day_cols) or "", axis=1)
         weekdays_row[target] = ""
@@ -525,12 +509,12 @@ def parse_schedule_file(uploaded_file):
     except Exception as e:
         return None, None, None, f"檔案解析失敗: {e}"
 
-# --- 從 Flatten Records 產出活動病歷掃描分析 ---
+# --- 從 Flatten Records 產出活動病歷掃描分析 (完美對齊格式) ---
 def generate_scan_analysis_excel_from_records(df_records, target_shifts):
     df_report = df_records[df_records['班別'].isin(target_shifts)].copy()
     
     if not df_report.empty:
-        # 將字串轉為 datetime 物件，保留為 date 型態以便 Excel 正確辨識格式
+        # 將字串轉為 datetime 物件，保留為 date 型態
         df_report['日期'] = pd.to_datetime(df_report['日期']).dt.date
         df_report = df_report.sort_values(by=["日期", "班別", "人員"])
         
@@ -539,26 +523,54 @@ def generate_scan_analysis_excel_from_records(df_records, target_shifts):
     ws = wb.active
     ws.title = "範例"
     
+    # --- 樣式設定 (字體、框線、置中) ---
+    base_font = Font(name='微軟正黑體', size=11)
+    header_font = Font(name='微軟正黑體', size=11, bold=True)
+    thin_border = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
+    center_alignment = Alignment(horizontal='center', vertical='center')
+
+    # --- 寫入表頭 (A~F) ---
     headers = ["日期", "班別", "人員", "總病歷本數（本）", "總掃描頁數（頁）", "備註"]
     for col_idx, header in enumerate(headers, 1):
-        ws.cell(row=1, column=col_idx, value=header)
+        cell = ws.cell(row=1, column=col_idx, value=header)
+        cell.font = header_font
+        cell.alignment = center_alignment
+        cell.border = thin_border
         
+    # --- 寫入資料 (A~C) ---
     if not df_report.empty:
         for row_idx, record in enumerate(df_report.to_dict('records'), 2):
-            # 寫入日期並設定 Excel 日期格式為 YYYY-MM-DD
+            # 寫入日期並設定 Excel 專屬 mm-dd 格式
             cell_date = ws.cell(row=row_idx, column=1, value=record["日期"])
-            cell_date.number_format = 'yyyy-mm-dd'
+            cell_date.number_format = 'mm-dd'
             
             ws.cell(row=row_idx, column=2, value=record["班別"])
             ws.cell(row=row_idx, column=3, value=record["人員"])
             
-    ws.cell(row=1, column=12, value="班別")
+    # --- 寫入 L 欄 (篩選條件) ---
+    cell_L1 = ws.cell(row=1, column=12, value="班別")
+    cell_L1.font = header_font
+    cell_L1.alignment = center_alignment
+    cell_L1.border = thin_border
+    
     for i, ts in enumerate(target_shifts, 2):
         ws.cell(row=i, column=12, value=ts)
         
-    thin_border = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
-    center_alignment = Alignment(horizontal='center', vertical='center')
-    
+    # --- 套用全域樣式給資料列 ---
+    for row in ws.iter_rows(min_row=2, max_row=len(df_report) + 1, min_col=1, max_col=6):
+        for cell in row:
+            cell.border = thin_border
+            cell.alignment = center_alignment
+            cell.font = base_font
+            
+    for row in ws.iter_rows(min_row=2, max_row=len(target_shifts) + 1, min_col=12, max_col=12):
+        for cell in row:
+            cell.border = thin_border
+            cell.alignment = center_alignment
+            cell.font = base_font
+            
+    # --- 調整欄寬 & 列高 (精準對齊範本視覺) ---
+    ws.row_dimensions[1].height = 20 # 表頭拉高
     ws.column_dimensions['A'].width = 15
     ws.column_dimensions['B'].width = 12
     ws.column_dimensions['C'].width = 12
@@ -567,18 +579,6 @@ def generate_scan_analysis_excel_from_records(df_records, target_shifts):
     ws.column_dimensions['F'].width = 15
     ws.column_dimensions['L'].width = 15
     
-    for row in ws.iter_rows(min_row=1, max_row=ws.max_row, min_col=1, max_col=6):
-        for cell in row:
-            if cell.value is not None:
-                cell.border = thin_border
-                cell.alignment = center_alignment
-                
-    for row in ws.iter_rows(min_row=1, max_row=ws.max_row, min_col=12, max_col=12):
-        for cell in row:
-            if cell.value is not None:
-                cell.border = thin_border
-                cell.alignment = center_alignment
-                
     wb.save(output)
     return output.getvalue()
 
@@ -674,7 +674,8 @@ with st.sidebar:
             st.error(err_msg)
         else:
             scan_excel_data = generate_scan_analysis_excel_from_records(df_records, selected_scan_shifts)
-            fn_scan = f"114活動病歷掃描分析_{r_year}_{r_month}.xlsx"
+            # 檔名更新：拿掉114
+            fn_scan = f"活動病歷掃描分析_{r_year}_{r_month}.xlsx"
             st.download_button(
                 label=f"⚡ 點擊下載掃描報表",
                 data=scan_excel_data,
