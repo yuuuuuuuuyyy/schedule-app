@@ -121,7 +121,6 @@ def check_consecutive_safe(timeline, index_to_change):
             current_con = 0
     return max_con <= 6
 
-# [修正處 1：傳入 skills_map 排除不排班人員]
 def apply_strict_labor_rules(df_result, year, month, staff_last_month_consecutive={}, skills_map=None):
     if skills_map is None: skills_map = {}
     
@@ -144,7 +143,6 @@ def apply_strict_labor_rules(df_result, year, month, staff_last_month_consecutiv
     for idx, row in df_result.iterrows():
         sid = row['ID']
         
-        # 🛡️ 終極防護：如果是不排班的人，直接跳過所有的勞基法強制補班邏輯
         user_skills = skills_map.get(sid, set())
         if "不排班" in user_skills:
             continue
@@ -432,26 +430,74 @@ def create_preview_df(df, year, month):
     df_preview = pd.concat([pd.DataFrame([weekdays_row]), df_preview], ignore_index=True)
     return df_preview
 
-def generate_scan_analysis_excel(df, year, month, target_shifts):
-    records = []
-    for _, row in df.iterrows():
-        staff_id = row.get('ID', row.get('卡號', ''))
-        for col in df.columns:
-            if col not in ['ID', 'Name', '卡號', '員工']:
+# --- 解析上傳的 Final Schedule Excel ---
+def parse_schedule_file(uploaded_file):
+    try:
+        df_raw = pd.read_excel(uploaded_file, header=None, dtype=str)
+        year, month = None, None
+        
+        # 1. 尋找年份與月份
+        for i in range(min(5, len(df_raw))):
+            row_vals = df_raw.iloc[i].values
+            for j in range(len(row_vals)):
+                if str(row_vals[j]).strip() == "年" and j > 0:
+                    try: year = int(float(str(row_vals[j-1]).strip()))
+                    except: pass
+                if str(row_vals[j]).strip() == "月" and j > 0:
+                    try: month = int(float(str(row_vals[j-1]).strip()))
+                    except: pass
+                    
+        # 2. 尋找包含「卡號」的表頭列索引
+        h_idx = -1
+        for i in range(min(10, len(df_raw))):
+            if any(isinstance(v, str) and "卡號" in v for v in df_raw.iloc[i].values):
+                h_idx = i
+                break
+                
+        if h_idx == -1 or year is None or month is None:
+            return None, None, None, "❌ 無法解析年份、月份或卡號列，請確認上傳的是正確的排班結果檔。"
+            
+        date_row = df_raw.iloc[h_idx - 1]
+        header_row = df_raw.iloc[h_idx]
+        
+        records = []
+        for row_idx in range(h_idx + 1, len(df_raw)):
+            row_data = df_raw.iloc[row_idx]
+            staff_id = ""
+            
+            for col_idx in range(len(header_row)):
+                if str(header_row.iloc[col_idx]).strip() == "卡號":
+                    staff_id = str(row_data.iloc[col_idx]).strip()
+                    break
+                    
+            if not staff_id or staff_id in ['nan', 'None']:
+                continue
+                
+            for col_idx in range(len(header_row)):
+                d_val = str(date_row.iloc[col_idx]).strip()
                 try:
-                    day = int(col)
-                    shift = str(row[col]).strip()
-                    if shift in target_shifts:
-                        date_str = datetime(year, month, day).strftime("%Y-%m-%d")
-                        records.append({
-                            "日期": date_str,
-                            "班別": shift,
-                            "人員": staff_id
-                        })
-                except ValueError:
+                    d = int(float(d_val))
+                    if 1 <= d <= 31:
+                        shift = str(row_data.iloc[col_idx]).strip()
+                        if shift not in ['', 'nan', 'None', '0']:
+                            date_str = f"{year}-{month:02d}-{d:02d}"
+                            records.append({
+                                '日期': date_str,
+                                '班別': shift,
+                                '人員': staff_id
+                            })
+                except:
                     pass
+                    
+        df_records = pd.DataFrame(records)
+        return df_records, year, month, ""
+    except Exception as e:
+        return None, None, None, f"檔案解析失敗: {e}"
+
+# --- 從 Flatten Records 產出活動病歷掃描分析 ---
+def generate_scan_analysis_excel_from_records(df_records, target_shifts):
+    df_report = df_records[df_records['班別'].isin(target_shifts)].copy()
     
-    df_report = pd.DataFrame(records)
     if not df_report.empty:
         df_report['日期'] = pd.to_datetime(df_report['日期'])
         df_report = df_report.sort_values(by=["日期", "班別", "人員"])
@@ -471,7 +517,7 @@ def generate_scan_analysis_excel(df, year, month, target_shifts):
             ws.cell(row=row_idx, column=1, value=record["日期"])
             ws.cell(row=row_idx, column=2, value=record["班別"])
             ws.cell(row=row_idx, column=3, value=record["人員"])
-    
+            
     ws.cell(row=1, column=12, value="班別")
     for i, ts in enumerate(target_shifts, 2):
         ws.cell(row=i, column=12, value=ts)
@@ -573,8 +619,39 @@ with st.sidebar:
             except Exception as e:
                 st.error(f"生成失敗: {e}")
 
+    # --- 新增：將病歷掃描分析報表移至側邊欄 ---
     st.divider()
-    uploaded_file = st.file_uploader("📂 請上傳 Excel 排班表 (data.xlsx)", type=['xlsx'])
+    st.write("📥 **產出活動病歷掃描分析**")
+    st.caption("上傳已生成的排班結果檔 (schedule_..._final.xlsx) 來轉換報表。")
+    scan_uploaded_file = st.file_uploader("📂 上傳排班結果檔", type=['xlsx'], key="scan_upload")
+    
+    default_scan_shifts = ["8-4'掃", "8-4'", "8-5", "12'-9", "8-5掃"]
+    all_possible_shifts = list(set(["8-4'F", "8-5", "12'-9", "4-12", "8-4'掃", "8-4'銷", "8-4'", "8-5銷", "8-5掃", "01", "01特", "9", "9例"] + default_scan_shifts))
+    
+    selected_scan_shifts = st.multiselect(
+        "選擇要匯出的班別 (L欄)：",
+        options=all_possible_shifts,
+        default=[s for s in default_scan_shifts if s in all_possible_shifts]
+    )
+    
+    if scan_uploaded_file is not None:
+        df_records, r_year, r_month, err_msg = parse_schedule_file(scan_uploaded_file)
+        if err_msg:
+            st.error(err_msg)
+        else:
+            scan_excel_data = generate_scan_analysis_excel_from_records(df_records, selected_scan_shifts)
+            fn_scan = f"114活動病歷掃描分析_{r_year}_{r_month}.xlsx"
+            st.download_button(
+                label=f"⚡ 點擊下載掃描報表",
+                data=scan_excel_data,
+                file_name=fn_scan,
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                type="primary",
+                use_container_width=True
+            )
+
+    st.divider()
+    uploaded_file = st.file_uploader("📂 步驟二：請上傳排班模板 (data.xlsx) 以啟動 AI 排班", type=['xlsx'])
     st.info("💡 **週期上色說明**：\n- 日期列：28天大週期 (藍/橘)\n- 星期列：14天小週期 (粉/紫)")
 
 st.title("📅 智慧排班系統")
@@ -582,7 +659,6 @@ st.markdown("---")
 
 if uploaded_file is not None:
     try:
-        # [修正處 2：強制使用 dtype=str 確保「01805」不失真]
         try:
             df_staff = pd.read_excel(uploaded_file, sheet_name='Staff', dtype=str)
             staff_cols = {'ID': ['ID', '卡號'], 'Skills': ['Skills', '技能']}
@@ -808,7 +884,6 @@ if uploaded_file is not None:
                         val = str(r[str(d)]).strip()
                         if val in ['','nan','None','0']: df_fin.at[idx, str(d)] = fill
 
-                # [修正處 3：把 skills_map 帶入，讓勞基法機制直接跳過不排班的人]
                 df_fin, _ = apply_strict_labor_rules(df_fin, y, m, last_con, skills_map)
                 
                 cols = ['ID', 'Name'] + [str(d) for d in v_days]
@@ -819,7 +894,7 @@ if uploaded_file is not None:
                 kpi2.metric("📅 排班總天數", f"{len(v_days)} 天")
                 kpi3.metric("🛡️ 違規檢查", "0 錯誤", delta="Passed")
 
-                tab1, tab2, tab3 = st.tabs(["📊 排班結果預覽", "📥 下載 Excel", "📝 下載活動病歷掃描分析"])
+                tab1, tab2 = st.tabs(["📊 排班結果預覽", "📥 下載 Excel"])
                 with tab1:
                     df_preview = create_preview_df(df_export, y, m)
                     st.dataframe(df_preview, use_container_width=True)
@@ -827,28 +902,6 @@ if uploaded_file is not None:
                     xlsx_data = generate_formatted_excel(df_export, y, m)
                     fn = f"schedule_{y}_{m}_final.xlsx"
                     st.download_button(label=f"📥 下載排班結果 ({fn})", data=xlsx_data, file_name=fn, mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", type="primary")
-                with tab3:
-                    st.write("📥 **產出符合【114活動病歷掃描分析】格式的報表**")
-                    st.info("系統會自動抓取您選擇的班別，並產出對應的「日期、班別、人員」清單。右側 (L欄) 也會自動附上對應的篩選條件格式。")
-                    
-                    default_scan_shifts = ["8-4'掃", "8-4'", "8-5", "12'-9", "8-5掃"]
-                    all_possible_shifts = list(set(["8-4'F", "8-5", "12'-9", "4-12", "8-4'掃", "8-4'銷", "8-4'", "8-5銷", "8-5掃", "01", "01特", "9", "9例"] + default_scan_shifts))
-                    
-                    selected_scan_shifts = st.multiselect(
-                        "請選擇要匯出的班別條件 (L欄)：",
-                        options=all_possible_shifts,
-                        default=[s for s in default_scan_shifts if s in all_possible_shifts]
-                    )
-                    
-                    scan_excel_data = generate_scan_analysis_excel(df_export, y, m, selected_scan_shifts)
-                    fn_scan = f"114活動病歷掃描分析_{y}_{m}.xlsx"
-                    st.download_button(
-                        label=f"📥 點擊下載 ({fn_scan})",
-                        data=scan_excel_data,
-                        file_name=fn_scan,
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        type="primary"
-                    )
             else:
                 st.error("❌ 排班失敗：找不到可行解。")
     except Exception as e:
