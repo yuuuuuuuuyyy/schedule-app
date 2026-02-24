@@ -583,8 +583,9 @@ def generate_scan_analysis_excel_from_records(df_records, target_shifts):
 # --- 3. 主程式介面 ---
 
 with st.sidebar:
-    st.title("⚙️ 排班設定面板")
+    st.title("⚙️ 系統設定與工具")
     
+    # 全域設定：年份與月份
     c1, c2 = st.columns(2)
     with c1: 
         now = datetime.now()
@@ -597,16 +598,28 @@ with st.sidebar:
 
     st.divider()
 
-    st.write("📝 **初次使用？請先下載範本**")
-    template_data = create_template_excel(y, m) 
-    st.download_button(
-        label="📥 下載排班範本",
-        data=template_data,
-        file_name="排班範本.xlsx", 
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    # --- 左側：清單式選單 ---
+    st.write("📌 **功能導覽**")
+    tool_choice = st.radio(
+        "請選擇您要執行的工具：",
+        ["📝 下載排班範本", "🛠️ 快速生成每月需求表", "📥 產出活動病歷掃描分析"]
     )
     
-    with st.expander("🛠️ 快速生成每月需求表 (Shifts)"):
+    st.divider()
+
+    # 根據選單動態顯示對應的工具區塊
+    if tool_choice == "📝 下載排班範本":
+        st.write("📝 **初次使用？請先下載排班所需格式**")
+        template_data = create_template_excel(y, m) 
+        st.download_button(
+            label="📥 點擊下載排班範本",
+            data=template_data,
+            file_name="排班範本.xlsx", 
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+        
+    elif tool_choice == "🛠️ 快速生成每月需求表":
+        st.write("🛠️ **快速生成每月需求表 (Shifts)**")
         st.caption("勾選平日/假日需要的班別，自動產生整個月的 Excel！")
         all_shifts = [
             "8-4'F", "8-5", "12'-9", "4-12", "8-4'掃", 
@@ -617,13 +630,11 @@ with st.sidebar:
         st.write("🗓️ **平日 (週一~週五)**:")
         wd_default = ["8-4'F", "8-5", "12'-9", "4-12", "8-5掃", "01"]
         wd_default = [x for x in wd_default if x in all_shifts]
-        
         wd_shifts = st.multiselect("平日班別", all_shifts, default=wd_default)
 
         st.write("🎉 **假日 (週六、週日)**:")
         we_default = ["8-4'F", "8-4'", "4-12", "8-4'掃"]
         we_default = [x for x in we_default if x in all_shifts]
-        
         we_shifts = st.multiselect("假日班別", all_shifts, default=we_default)
 
         if st.button("⚡ 生成並準備下載"):
@@ -650,43 +661,41 @@ with st.sidebar:
             except Exception as e:
                 st.error(f"生成失敗: {e}")
 
-    # --- 左側欄位：病歷掃描分析報表 ---
-    st.divider()
-    st.write("📥 **產出活動病歷掃描分析**")
-    st.caption("上傳已生成的排班結果檔 (schedule_..._final.xlsx) 來轉換報表。")
-    scan_uploaded_file = st.file_uploader("📂 上傳排班結果檔", type=['xlsx'], key="scan_upload")
-    
-    default_scan_shifts = ["8-4'掃", "8-4'", "8-5", "12'-9", "8-5掃"]
-    all_possible_shifts = list(set(["8-4'F", "8-5", "12'-9", "4-12", "8-4'掃", "8-4'銷", "8-4'", "8-5銷", "8-5掃", "01", "01特", "9", "9例"] + default_scan_shifts))
-    
-    selected_scan_shifts = st.multiselect(
-        "選擇要匯出的班別 (L欄)：",
-        options=all_possible_shifts,
-        default=[s for s in default_scan_shifts if s in all_possible_shifts]
-    )
-    
-    if scan_uploaded_file is not None:
-        df_records, r_year, r_month, err_msg = parse_schedule_file(scan_uploaded_file)
-        if err_msg:
-            st.error(err_msg)
-        else:
-            scan_excel_data = generate_scan_analysis_excel_from_records(df_records, selected_scan_shifts)
-            # 檔名更新：拿掉114，變成 活動病歷掃描分析_年份_月份.xlsx
-            fn_scan = f"活動病歷掃描分析_{r_year}_{r_month}.xlsx"
-            st.download_button(
-                label=f"⚡ 點擊下載掃描報表",
-                data=scan_excel_data,
-                file_name=fn_scan,
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                type="primary",
-                use_container_width=True
-            )
+    elif tool_choice == "📥 產出活動病歷掃描分析":
+        st.write("📥 **產出活動病歷掃描分析**")
+        st.caption("請上傳已排好的班表結果檔 (schedule_..._final.xlsx)。")
+        scan_uploaded_file = st.file_uploader("📂 選擇排班結果檔", type=['xlsx'], key="scan_upload")
+        
+        default_scan_shifts = ["8-4'掃", "8-4'", "8-5", "12'-9", "8-5掃"]
+        all_possible_shifts = list(set(["8-4'F", "8-5", "12'-9", "4-12", "8-4'掃", "8-4'銷", "8-4'", "8-5銷", "8-5掃", "01", "01特", "9", "9例"] + default_scan_shifts))
+        
+        selected_scan_shifts = st.multiselect(
+            "請選擇要匯出的班別 (L欄)：",
+            options=all_possible_shifts,
+            default=[s for s in default_scan_shifts if s in all_possible_shifts]
+        )
+        
+        if scan_uploaded_file is not None:
+            df_records, r_year, r_month, err_msg = parse_schedule_file(scan_uploaded_file)
+            if err_msg:
+                st.error(err_msg)
+            else:
+                scan_excel_data = generate_scan_analysis_excel_from_records(df_records, selected_scan_shifts)
+                fn_scan = f"活動病歷掃描分析_{r_year}_{r_month}.xlsx"
+                st.download_button(
+                    label=f"⚡ 點擊下載掃描報表",
+                    data=scan_excel_data,
+                    file_name=fn_scan,
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    type="primary",
+                    use_container_width=True
+                )
 
 
+# --- 4. 主畫面：核心排班功能 ---
 st.title("📅 智慧排班系統")
 st.markdown("---")
 
-# --- 主畫面：排班功能 ---
 uploaded_file = st.file_uploader("📂 請上傳排班模板 (data.xlsx) 以啟動 AI 排班", type=['xlsx'])
 st.info("💡 **週期上色說明**：\n- 日期列：28天大週期 (藍/橘)\n- 星期列：14天小週期 (粉/紫)")
 
