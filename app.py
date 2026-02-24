@@ -316,7 +316,11 @@ def generate_formatted_excel(df, year, month):
             except: pass
     day_cols.sort()
     
-    row1 = [""] * (len(day_cols) + 2 + len(STATS_TARGETS))
+    # 總寬度 = 2(卡號/員工) + len(day_cols)(日期) + 1(空白間隔欄) + len(STATS_TARGETS)(統計)
+    total_cols = len(day_cols) + 2 + 1 + len(STATS_TARGETS)
+    
+    # [第 1 列] 年月標題
+    row1 = [""] * total_cols
     mid_idx = len(day_cols) // 2
     if mid_idx < 2: mid_idx = 2
     row1[mid_idx-1] = year
@@ -325,21 +329,27 @@ def generate_formatted_excel(df, year, month):
     row1[mid_idx+2] = "月"
     ws.append(row1)
     
-    ws.append([""] * (len(day_cols) + 2 + len(STATS_TARGETS)))
+    # [第 2 列] 空白列
+    ws.append([""] * total_cols)
     
+    # [第 3 列] 日期 + 空白間隔 + 統計佔位
     row3 = ["", ""]
     for d in day_cols:
         row3.append(str(d))
+    row3.append("") # 加入空白間隔欄
     row3.extend([""] * len(STATS_TARGETS))
     ws.append(row3)
     
+    # [第 4 列] 標題 + 空白間隔 + 統計標題
     row4 = ["卡號", "員工"]
     for d in day_cols:
         dt = datetime(year, month, d)
         row4.append(weekday_map[dt.weekday()])
+    row4.append("") # 加入空白間隔欄
     row4.extend(STATS_TARGETS)
     ws.append(row4)
     
+    # [第 5 列開始] 寫入資料與統計
     for idx, r in df.iterrows():
         id_val = r.get('ID', r.get('卡號', ''))
         name_val = r.get('Name', r.get('員工', id_val))
@@ -352,6 +362,8 @@ def generate_formatted_excel(df, year, month):
             row_data.append(shift_val)
             shift_data.append(shift_val)
             
+        row_data.append("") # 加入空白間隔欄資料
+        
         for target in STATS_TARGETS:
             count = shift_data.count(target)
             row_data.append(count if count > 0 else "")
@@ -360,13 +372,22 @@ def generate_formatted_excel(df, year, month):
         
     thin_border = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
     
-    total_cols = len(day_cols) + 2 + len(STATS_TARGETS)
+    # 空白間隔欄的索引位置 (從 1 開始算)
+    spacer_col_idx = len(day_cols) + 3
+    
     for row in ws.iter_rows(min_row=3, max_row=ws.max_row, min_col=1, max_col=total_cols):
         for cell in row:
             cell.alignment = Alignment(horizontal='center', vertical='center')
+            
+            # 如果是空白間隔欄，跳過不畫框線也不塗色
+            if cell.column == spacer_col_idx:
+                continue
+                
+            # 畫框線 (不含間隔欄)
             if cell.row >= 4 or (cell.row == 3 and 3 <= cell.column <= len(day_cols) + 2):
                 cell.border = thin_border
                 
+            # 塗色 (只限日期區塊)
             if cell.row in [3, 4] and 3 <= cell.column <= len(day_cols) + 2:
                 d = day_cols[cell.column - 3]
                 current_dt = datetime(year, month, d)
@@ -381,13 +402,17 @@ def generate_formatted_excel(df, year, month):
                         if small_cycle_idx % 2 == 0: cell.fill = fill_small_pink
                         else: cell.fill = fill_small_purple
 
+    # --- 調整欄寬 ---
     ws.column_dimensions['A'].width = 10
     ws.column_dimensions['B'].width = 12
+    # 日期區塊
     for col_idx in range(3, len(day_cols) + 3):
         col_letter = get_column_letter(col_idx)
         ws.column_dimensions[col_letter].width = 8
-        
-    for col_idx in range(len(day_cols) + 3, total_cols + 1):
+    # 空白間隔欄 (設定較窄，營造分隔感)
+    ws.column_dimensions[get_column_letter(spacer_col_idx)].width = 3
+    # 統計區塊
+    for col_idx in range(spacer_col_idx + 1, total_cols + 1):
         col_letter = get_column_letter(col_idx)
         ws.column_dimensions[col_letter].width = 6
 
@@ -423,6 +448,12 @@ def create_preview_df(df, year, month):
     df_preview = df.copy()
     df_preview.columns = new_cols
     
+    # 建立網頁預覽用的空白間隔欄
+    spacer_name = " "
+    df_preview[spacer_name] = ""
+    weekdays_row[spacer_name] = ""
+    
+    # 計算右側統計
     for target in STATS_TARGETS:
         df_preview[target] = df_preview.apply(lambda row: sum(str(row.get(d, '')).strip() == target for d in day_cols) or "", axis=1)
         weekdays_row[target] = ""
@@ -514,7 +545,7 @@ def generate_scan_analysis_excel_from_records(df_records, target_shifts):
         
     if not df_report.empty:
         for row_idx, record in enumerate(df_report.to_dict('records'), 2):
-            # 寫入日期並設定 Excel 日期格式為 yyyy-mm-dd
+            # 寫入日期並設定 Excel 日期格式為 YYYY-MM-DD
             cell_date = ws.cell(row=row_idx, column=1, value=record["日期"])
             cell_date.number_format = 'yyyy-mm-dd'
             
