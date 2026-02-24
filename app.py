@@ -509,12 +509,11 @@ def parse_schedule_file(uploaded_file):
     except Exception as e:
         return None, None, None, f"檔案解析失敗: {e}"
 
-# --- 從 Flatten Records 產出活動病歷掃描分析 (完美對齊格式) ---
+# --- 從 Flatten Records 產出活動病歷掃描分析 ---
 def generate_scan_analysis_excel_from_records(df_records, target_shifts):
     df_report = df_records[df_records['班別'].isin(target_shifts)].copy()
     
     if not df_report.empty:
-        # 將字串轉為 datetime 物件，保留為 date 型態
         df_report['日期'] = pd.to_datetime(df_report['日期']).dt.date
         df_report = df_report.sort_values(by=["日期", "班別", "人員"])
         
@@ -523,9 +522,8 @@ def generate_scan_analysis_excel_from_records(df_records, target_shifts):
     ws = wb.active
     ws.title = "範例"
     
-    # --- 樣式設定 (字體、框線、置中) ---
+    # --- 統一樣式設定 (字體: 微軟正黑體 11, 置中, 框線) ---
     base_font = Font(name='微軟正黑體', size=11)
-    header_font = Font(name='微軟正黑體', size=11, bold=True)
     thin_border = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
     center_alignment = Alignment(horizontal='center', vertical='center')
 
@@ -533,23 +531,23 @@ def generate_scan_analysis_excel_from_records(df_records, target_shifts):
     headers = ["日期", "班別", "人員", "總病歷本數（本）", "總掃描頁數（頁）", "備註"]
     for col_idx, header in enumerate(headers, 1):
         cell = ws.cell(row=1, column=col_idx, value=header)
-        cell.font = header_font
+        cell.font = base_font
         cell.alignment = center_alignment
         cell.border = thin_border
         
     # --- 寫入資料 (A~C) ---
     if not df_report.empty:
         for row_idx, record in enumerate(df_report.to_dict('records'), 2):
-            # 寫入日期並設定 Excel 專屬 mm-dd 格式
+            # 寫入日期並設定 Excel 格式為 m月d日 (例如 3月1日)
             cell_date = ws.cell(row=row_idx, column=1, value=record["日期"])
-            cell_date.number_format = 'mm-dd'
+            cell_date.number_format = 'm"月"d"日"'
             
             ws.cell(row=row_idx, column=2, value=record["班別"])
             ws.cell(row=row_idx, column=3, value=record["人員"])
             
     # --- 寫入 L 欄 (篩選條件) ---
     cell_L1 = ws.cell(row=1, column=12, value="班別")
-    cell_L1.font = header_font
+    cell_L1.font = base_font
     cell_L1.alignment = center_alignment
     cell_L1.border = thin_border
     
@@ -569,8 +567,7 @@ def generate_scan_analysis_excel_from_records(df_records, target_shifts):
             cell.alignment = center_alignment
             cell.font = base_font
             
-    # --- 調整欄寬 & 列高 (精準對齊範本視覺) ---
-    ws.row_dimensions[1].height = 20 # 表頭拉高
+    # --- 調整欄寬 (對齊您的範本) ---
     ws.column_dimensions['A'].width = 15
     ws.column_dimensions['B'].width = 12
     ws.column_dimensions['C'].width = 12
@@ -674,7 +671,7 @@ with st.sidebar:
             st.error(err_msg)
         else:
             scan_excel_data = generate_scan_analysis_excel_from_records(df_records, selected_scan_shifts)
-            # 檔名更新：拿掉114
+            # 檔名更新：拿掉114，變成 活動病歷掃描分析_年份_月份.xlsx
             fn_scan = f"活動病歷掃描分析_{r_year}_{r_month}.xlsx"
             st.download_button(
                 label=f"⚡ 點擊下載掃描報表",
